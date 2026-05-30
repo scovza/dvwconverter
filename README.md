@@ -4,6 +4,27 @@ A minimal, dependency-free Python tool that converts DataVolley `.dvw` scouting 
 
 > **v0.1.0 — First public release.**
 
+## Release Notes
+
+### v0.1.0 — 2026-05-30
+
+First public release.
+
+**Features**
+
+- Parse DataVolley `.dvw` format 2.0 (Windows-1252) into typed Python dataclasses.
+- Import one or more `.dvw` files into a single SQLite database.
+- Export SQLite database back to `.dvw` with lossless scout-section round-trips.
+- CLI commands: `dvw2db`, `db2dvw`, `info`.
+- All output written to `output/` by default.
+- No third-party dependencies.
+
+**Known gaps (tracked for future releases)**
+
+- Substitution, rotation, and rally-outcome scout lines are classified but not fully decoded.
+- Several `[3MATCH]`, `[3MORE]`, `[3PLAYERS]`, and `[3ATTACKCOMBINATION]` fields remain unnamed.
+- No test suite yet.
+
 ---
 
 ## Table of Contents
@@ -21,7 +42,7 @@ A minimal, dependency-free Python tool that converts DataVolley `.dvw` scouting 
 11. [Court Coordinate System](#court-coordinate-system)
 12. [Undecoded Fields](#undecoded-fields)
 13. [Known Limitations](#known-limitations)
-14. [Release Notes](#release-notes)
+14. [TODO](#to-do)
 
 ---
 
@@ -765,24 +786,6 @@ Present in the file but not read. No content observed.
 
 ---
 
-## Release Notes
+## TO DO
 
-### v0.1.0 — 2026-05-30
-
-First public release.
-
-**Features**
-
-- Parse DataVolley `.dvw` format 2.0 (Windows-1252) into typed Python dataclasses.
-- Import one or more `.dvw` files into a single SQLite database.
-- Export SQLite database back to `.dvw` with lossless scout-section round-trips.
-- CLI commands: `dvw2db`, `db2dvw`, `info`.
 - Accuracy Index: deterministic 0–100 conversion confidence score.
-- All output written to `output/` by default.
-- No third-party dependencies.
-
-**Known gaps (tracked for future releases)**
-
-- Substitution, rotation, and rally-outcome scout lines are classified but not fully decoded.
-- Several `[3MATCH]`, `[3MORE]`, `[3PLAYERS]`, and `[3ATTACKCOMBINATION]` fields remain unnamed.
-- No test suite yet.
