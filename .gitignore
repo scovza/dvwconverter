@@ -2,6 +2,4 @@ build
 dvwconverter.egg-info
 input
 output
-CHANGELOG.md
-matches.db
 .idea

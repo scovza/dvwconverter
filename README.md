@@ -2,9 +2,30 @@
 
 A minimal, dependency-free Python tool that converts DataVolley `.dvw` scouting files to SQLite and back.
 
-> **v0.1.0 — First public release.**
+> **v0.2.0 — Automatic round-trip accuracy on every conversion.**
 
 ## Release Notes
+
+### v0.2.0 — 2026-05-30
+
+**New features**
+
+- **Automatic round-trip accuracy on every conversion** — both `dvw2db` and `db2dvw` now
+  automatically perform a forward + backward conversion and compare the original `.dvw` against
+  the reconstructed one. The Round-Trip Score (0–100), data loss %, and scout-event match ratio
+  are printed inline with each file's output line. Use `--verbose` for the full per-section report.
+- **`db2dvw` output now in `output/dvw/`** — reconstructed `.dvw` files are written under the
+  configured output directory (default `output/dvw/`). The files are therefore always visible in
+  the `output/` tree.
+- **`roundtrip.py` module** — `roundtrip_accuracy()` and `roundtrip_from_recon()` are part of
+  the public Python API. `RoundTripReport` and `SectionDiff` are also exported.
+
+**Bug fixes**
+
+- `db2dvw` previously ignored `--output-dir`; now respects it.
+- Removed the separate `roundtrip` CLI command; round-trip is now built into every conversion.
+
+---
 
 ### v0.1.0 — 2026-05-30
 
@@ -35,14 +56,15 @@ First public release.
 4. [CLI Reference](#cli-reference)
 5. [Python API](#python-api)
 6. [Accuracy Index](#accuracy-index)
-7. [Architecture Overview](#architecture-overview)
-8. [DVW File Format](#dvw-file-format)
-9. [SQLite Schema](#sqlite-schema)
-10. [Skill / Evaluation Codes](#skill--evaluation-codes)
-11. [Court Coordinate System](#court-coordinate-system)
-12. [Undecoded Fields](#undecoded-fields)
-13. [Known Limitations](#known-limitations)
-14. [TODO](#to-do)
+7. [Round-Trip Accuracy](#round-trip-accuracy)
+8. [Architecture Overview](#architecture-overview)
+9. [DVW File Format](#dvw-file-format)
+10. [SQLite Schema](#sqlite-schema)
+11. [Skill / Evaluation Codes](#skill--evaluation-codes)
+12. [Court Coordinate System](#court-coordinate-system)
+13. [Undecoded Fields](#undecoded-fields)
+14. [Known Limitations](#known-limitations)
+15. [TODO](#to-do)
 
 ---
 
@@ -70,7 +92,7 @@ python -m dvwconverter <command> ...
 ## Quick Start
 
 ```bash
-# Import one match
+# Import one match  (round-trip accuracy printed automatically)
 dvwconverter dvw2db match.dvw
 
 # Import a full season
@@ -79,8 +101,12 @@ dvwconverter dvw2db *.dvw -o season.db
 # List matches in a database
 dvwconverter info output/season.db
 
-# Export a match back to .dvw
+# Export a match back to .dvw  (round-trip accuracy printed automatically)
 dvwconverter db2dvw output/season.db --id 1
+
+# Full per-section round-trip report
+dvwconverter dvw2db match.dvw --verbose
+dvwconverter db2dvw output/season.db --verbose
 ```
 
 ---
@@ -108,11 +134,14 @@ dvwconverter dvw2db match_01.dvw match_02.dvw -o season.db
 Output:
 
 ```
-  parsing  match_01.dvw ... ok  [id=1  Home Team vs Away Team  events=1154  accuracy=94.3]
-  parsing  match_02.dvw ... ok  [id=2  Home Team vs Away Team  events=1172  accuracy=91.8]
+  parsing  match_01.dvw ... ok  [id=1  Home Team vs Away Team  events=1154  accuracy=94.3  roundtrip=97.4  loss=0.31%  scout=100%]
+  parsing  match_02.dvw ... ok  [id=2  Home Team vs Away Team  events=1172  accuracy=91.8  roundtrip=98.1  loss=0.12%  scout=100%]
 
-Database: output/season.db
+Database     : output/matches.db
+Reconstructed: output/roundtrip/
 ```
+
+With `--verbose`, a full per-section diff report is appended after each file.
 
 ---
 
@@ -126,12 +155,26 @@ dvwconverter db2dvw DB.db [--id ID] [-o DIR]
 |-----------|--------------------------------------------------|
 | `DB.db`   | Source SQLite database                           |
 | `--id ID` | Export only the match with this `file_header_id` |
-| `-o DIR`  | Output directory (default: `output/`)            |
+| `-o DIR`  | Root output directory (default: `output/`)       |
+
+Reconstructed `.dvw` files are written to `<DIR>/dvw/`.
 
 ```bash
-dvwconverter db2dvw season.db -o ./dvw_export/
-dvwconverter db2dvw season.db --id 2 -o ./dvw_export/
+dvwconverter db2dvw output/season.db            # → output/dvw/<stem>.dvw
+dvwconverter db2dvw output/season.db --id 2     # → output/dvw/<stem>.dvw
+dvwconverter db2dvw output/season.db -o export/ # → export/dvw/<stem>.dvw
 ```
+
+Output (round-trip accuracy printed automatically if the original file is still on disk):
+
+```
+  written: output/dvw/match_01.dvw
+    [roundtrip] roundtrip=97.4  loss=0.31%  scout=100%
+
+Output directory: output/dvw
+```
+
+If the original `.dvw` has been moved or deleted, the round-trip step is skipped with a notice.
 
 ---
 
@@ -150,49 +193,71 @@ dvwconverter info DB.db
 
 ---
 
+---
+
 ## Python API
 
 ```python
-from dvwconverter import parse_dvw, dvw_to_db, db_to_dvw, compute_accuracy
+from dvwconverter import (
+    parse_dvw, dvw_to_db, db_to_dvw,
+    compute_accuracy, AccuracyReport,
+    roundtrip_accuracy, roundtrip_from_recon, RoundTripReport,
+)
 
-dvw = parse_dvw("match.dvw")
-print(dvw.match.date)  # "05/01/2026"
-print(dvw.teams[0].team_name)  # "Home Team"
-print(len(dvw.scout_events))  # 1154
+# Forward conversion + Accuracy Index
+dvw  = parse_dvw("match.dvw")
+acc  = compute_accuracy(dvw)
+fhid = dvw_to_db(dvw, "season.db")
 
-report = compute_accuracy(dvw)
-print(report)
-# Accuracy Index : 94.3 / 100
-# ...
+# Round-trip accuracy after dvw2db (dvw→db→dvw, then diff)
+rt: RoundTripReport = roundtrip_accuracy(
+    original_path="match.dvw",
+    db_path="season.db",
+    fhid=fhid,
+    recon_dir="./output/roundtrip/",
+)
+print(rt.format_summary())          # one-liner
+print(rt.format_report())          # full section breakdown
+print(rt.format_report(verbose=True))  # include changed lines
 
-dvw_to_db(dvw, "season.db")
-db_to_dvw("season.db", output_dir="./output/")
-db_to_dvw("season.db", output_dir="./output/", file_header_id=1)
+# Backward conversion
+written = db_to_dvw("season.db", output_dir="./output/dvw/", file_header_id=1)
+
+# Round-trip accuracy after db2dvw (diff reconstructed vs original)
+rt2 = roundtrip_from_recon(
+    recon_path=written[0],
+    db_path="season.db",
+    fhid=1,
+)
+if rt2:
+    print(rt2.format_summary())
 ```
 
 ### Key classes
 
-| Class               | Description                           |
-|---------------------|---------------------------------------|
-| `DvwFile`           | Root container; holds all sections    |
-| `FileHeader`        | Generator metadata                    |
-| `MatchInfo`         | Match header (date, league, season …) |
-| `Team`              | Team record                           |
-| `MoreInfo`          | Venue, referee                        |
-| `SetScore`          | Per-set score snapshots               |
-| `Player`            | Player roster entry                   |
-| `AttackCombination` | Attack play-code definition           |
-| `SetterCall`        | Setter call code definition           |
-| `VideoFile`         | Linked video file path                |
-| `ScoutEvent`        | Single play-by-play event             |
-| `AccuracyReport`    | Accuracy Index result and breakdown   |
+| Class               | Description                                         |
+|---------------------|-----------------------------------------------------|
+| `DvwFile`           | Root container; holds all sections                  |
+| `FileHeader`        | Generator metadata                                  |
+| `MatchInfo`         | Match header (date, league, season …)               |
+| `Team`              | Team record                                         |
+| `MoreInfo`          | Venue, referee                                      |
+| `SetScore`          | Per-set score snapshots                             |
+| `Player`            | Player roster entry                                 |
+| `AttackCombination` | Attack play-code definition                         |
+| `SetterCall`        | Setter call code definition                         |
+| `VideoFile`         | Linked video file path                              |
+| `ScoutEvent`        | Single play-by-play event                           |
+| `AccuracyReport`    | Accuracy Index result and breakdown                             |
+| `RoundTripReport`   | Full round-trip diff report and metrics                         |
+| `SectionDiff`       | Per-section line-level diff statistics                          |
 
 ---
 
 ## Accuracy Index
 
-After each conversion, dvwconverter computes a **deterministic Accuracy Index** (0–100) that estimates how completely
-the file was parsed. It is a weighted sum of four measurable components.
+After each `dvw2db` conversion, dvwconverter computes a **deterministic Accuracy Index** (0–100) that estimates how
+completely the file was parsed. It is a weighted sum of four measurable components.
 
 ### Formula
 
@@ -220,12 +285,74 @@ Score = 100 × (0.50 × C_skill + 0.20 × C_header + 0.20 × C_score + 0.10 × C
 
 ### Limitations
 
-- The index measures **parsing completeness**, not semantic correctness. A file can score 100 and still contain
-  encoding artefacts or misidentified field positions.
-- `C_score` depends on DataVolley embedding score context in the export; some versions omit it, reducing the score
-  without affecting parse quality.
-- `C_volume` uses a fixed minimum of 50 events. Very short scrimmage files will score lower even if perfectly parsed.
-- Undecoded fields (`fieldN`) are ignored — they do not affect the score.
+- The index measures **parsing completeness**, not semantic correctness.
+- `C_score` depends on DataVolley embedding score context; some exports omit it.
+- `C_volume` uses a fixed minimum of 50 events; short files score lower even if perfectly parsed.
+- Undecoded `fieldN` columns are ignored and do not affect the score.
+
+---
+
+## Round-Trip Accuracy
+
+Every `dvw2db` and `db2dvw` conversion automatically performs a full **forward + backward** round-trip and
+prints the result inline. The round-trip score complements the Accuracy Index: where the Accuracy Index measures
+*parsing completeness* (how much of the original was decoded), the Round-Trip Score measures
+*reconstruction fidelity* (how much survives the db→dvw serialisation).
+
+### How it works
+
+**dvw2db** (forward + backward):
+```
+original .dvw ──► parse + store ──► SQLite DB ──► db_to_dvw ──► recon .dvw
+                                                                      │
+                                          line-by-line diff ◄─────────┘
+                                                   │
+                                           RoundTripReport (printed inline)
+```
+
+**db2dvw** (backward, then diff against stored original):
+```
+SQLite DB ──► db_to_dvw ──► recon .dvw
+                                 │
+              diff vs original ◄─┘  (original path is stored in file_header.source_path)
+                    │
+            RoundTripReport (printed inline; skipped if original no longer on disk)
+```
+
+### Round-Trip Score formula
+
+```
+RoundTripScore = 100 × (0.55 × line_match_ratio
+                       + 0.25 × section_coverage
+                       + 0.20 × scout_match_ratio)
+```
+
+| Component          | Weight | Definition                                                              |
+|--------------------|--------|-------------------------------------------------------------------------|
+| `line_match_ratio` | 0.55   | Fraction of original lines present in reconstruction (multiset)         |
+| `section_coverage` | 0.25   | Fraction of the 14 expected DVW sections present in reconstruction      |
+| `scout_match_ratio`| 0.20   | Fraction of `[3SCOUT]` events identical between original and reconstruction |
+
+### Score interpretation
+
+| Range  | Meaning                                                                    |
+|--------|----------------------------------------------------------------------------|
+| 95–100 | Lossless or near-lossless. Only cosmetic differences (whitespace, order).  |
+| 80–94  | Minor structural data lost; scout events typically intact.                 |
+| 60–79  | Moderate loss in header sections; check undecoded fields.                  |
+| < 60   | Significant data loss. Likely undecoded fields or format mismatch.         |
+
+### Data loss %
+
+`data_loss_pct` counts how many original non-empty lines are absent in the reconstructed file (duplicate-sensitive,
+order-insensitive). A value of 0 % means every original line appears at least as many times in the reconstruction.
+
+### Notes
+
+- Scout events are always 100 % matched because the `raw` column is preserved verbatim.
+- Differences typically appear in `[3MATCH]` and `[3MORE]` where some fields remain unnamed (stored as `fieldN`) and
+  may be serialised in a slightly different position or with different whitespace.
+- Use `--verbose` to print the complete list of changed lines.
 
 ---
 
@@ -236,28 +363,40 @@ dvwconverter/
 ├── parser.py     — Read .dvw text → DvwFile dataclasses
 ├── db.py         — DvwFile ↔ SQLite (schema, insert, reconstruct, serialise)
 ├── accuracy.py   — Compute Accuracy Index from a DvwFile
+├── roundtrip.py  — Round-trip diff engine (roundtrip_accuracy / roundtrip_from_recon)
 └── __main__.py   — CLI (dvw2db / db2dvw / info)
 ```
 
-**Data flow:**
+**Data flow — dvw2db:**
 
 ```
-.dvw file
+original .dvw
    │
-   ▼  parse_dvw()          parser.py
-DvwFile ──────────────────────────────►  in-memory dataclasses
-   │
-   │  dvw_to_db()          db.py
-   ▼
-SQLite .db ◄──────────────────────────  db_to_dvw()  →  .dvw file
+   ├─► parse_dvw() ──► dvw_to_db() ──► SQLite .db
+   │                                        │
+   │                                        ▼ db_to_dvw()
+   │                                   recon .dvw  (output/roundtrip/)
+   │                                        │
+   └──────────── line diff ◄────────────────┘
+                     │
+              RoundTripReport  ──► printed inline
 ```
 
-The parser is a single-pass line scanner. It detects `[3SECTION]` markers, accumulates lines into a buffer, and
-dispatches to a dedicated parser function when the section ends. No third-party libraries are used.
+**Data flow — db2dvw:**
 
-The database layer uses only the Python standard library (`sqlite3`). Schema creation is idempotent (`CREATE TABLE IF
-NOT EXISTS`), so multiple imports into the same database are safe. The `raw` column in `scout_event` preserves the
-original unmodified scout line, making round-trips lossless regardless of how much the skill body was decoded.
+```
+SQLite .db
+   │
+   ▼ db_to_dvw()
+recon .dvw  (output/dvw/)
+   │
+   ├─► roundtrip_from_recon()  ──►  look up original source_path in DB
+   │                                        │
+   │                                        ▼  (if original still on disk)
+   └──────────── line diff ◄────────────────┘
+                     │
+              RoundTripReport  ──► printed inline
+```
 
 ---
 
@@ -417,14 +556,14 @@ One line per player:
 #### `[3SETTERCALL]`
 
 | # | Field             | Notes                                                                                    |
-|---|-------------------|------------------------------------------------------------------------------------------|
+|---|-------------------|------------------------------------------------------------------------------------------  |
 | 0 | `code`            | 2-char code, e.g. `K1`                                                                   |
 | 2 | `description`     | Human-readable label                                                                     |
 | 4 | `color`           | Decimal BGR colour                                                                       |
-| 5 | `x1`              | Setter's position (YYXX packed; same encoding as `attack_combination.position`)          |
+| 5 | `x1`              | Setter's position (YYXX packed)                                                          |
 | 6 | `y1`              | Apex of the set-arc ball trajectory (YYXX packed)                                        |
-| 7 | `x2`              | Attack target position (YYXX packed; matches `attack_combination.position` to within ±2) |
-| 8 | `area_list`       | Comma-separated area codes (used when x1/y1/x2 are 0)                                    |
+| 7 | `x2`              | Attack target position (YYXX packed)                                                     |
+| 8 | `area_list`       | Comma-separated area codes                                                               |
 | 9 | `highlight_color` | Decimal BGR colour                                                                       |
 
 ---
@@ -588,28 +727,28 @@ One row per imported `.dvw` file.
 
 ### `attack_combination`
 
-| Column              | Type    | Description                                                                            |
-|---------------------|---------|----------------------------------------------------------------------------------------|
-| `code`              | TEXT    | 2-char identifier (e.g. `X1`)                                                          |
-| `tempo`             | INTEGER | Speed/tempo                                                                            |
-| `side`              | TEXT    | L/R/C                                                                                  |
-| `height`            | TEXT    | Q/M/T/H/O/U                                                                            |
-| `description`       | TEXT    | Human-readable label                                                                   |
-| `color`             | INTEGER | BGR colour                                                                             |
-| `position`          | INTEGER | Packed court position `YYXX` — see [Court Coordinate System](#court-coordinate-system) |
-| `attacker_position` | TEXT    | F/B/C/S/P/-                                                                            |
+| Column              | Type    | Description                       |
+|---------------------|---------|-----------------------------------|
+| `code`              | TEXT    | 2-char identifier (e.g. `X1`)     |
+| `tempo`             | INTEGER | Speed/tempo                       |
+| `side`              | TEXT    | L/R/C                             |
+| `height`            | TEXT    | Q/M/T/H/O/U                       |
+| `description`       | TEXT    | Human-readable label              |
+| `color`             | INTEGER | BGR colour                        |
+| `position`          | INTEGER | Packed court position `YYXX`      |
+| `attacker_position` | TEXT    | F/B/C/S/P/-                       |
 
 ### `setter_call`
 
-| Column        | Type    | Description                                                        |
-|---------------|---------|--------------------------------------------------------------------|
-| `code`        | TEXT    | 2-char identifier (e.g. `K1`)                                      |
-| `description` | TEXT    | Human-readable label                                               |
-| `x1`          | INTEGER | Setter's position (YYXX packed)                                    |
-| `y1`          | INTEGER | Set arc apex (YYXX packed)                                         |
-| `x2`          | INTEGER | Attack target (YYXX packed; matches `attack_combination.position`) |
-| `area_list`   | TEXT    | Comma-separated area codes                                         |
-| `color`       | INTEGER | BGR colour                                                         |
+| Column        | Type    | Description                     |
+|---------------|---------|---------------------------------|
+| `code`        | TEXT    | 2-char identifier (e.g. `K1`)   |
+| `description` | TEXT    | Human-readable label            |
+| `x1`          | INTEGER | Setter's position (YYXX packed) |
+| `y1`          | INTEGER | Set arc apex (YYXX packed)      |
+| `x2`          | INTEGER | Attack target (YYXX packed)     |
+| `area_list`   | TEXT    | Comma-separated area codes      |
+| `color`       | INTEGER | BGR colour                      |
 
 ### `scout_event`
 
@@ -620,7 +759,7 @@ One row per imported `.dvw` file.
 | `team`                 | TEXT    | `H`=home, `V`=visiting                         |
 | `player_number`        | INTEGER | Jersey number                                  |
 | `skill`                | TEXT    | S/R/E/A/B/D/F/T/O                              |
-| `skill_type`           | TEXT    | H/M/Q/U/T/O                                    |
+| `skill_type`           | TEXT    | H/M/Q/U/T/O                                   |
 | `evaluation`           | TEXT    | +/#/-//!/=                                     |
 | `attack_code`          | TEXT    | Attack combination code                        |
 | `setter_code`          | TEXT    | Setter call code                               |
@@ -660,8 +799,8 @@ encoding**, representing positions on DataVolley's half-court canvas (attacking 
 baseline toward the net).
 
 ```python
-depth = position // 100  # YY — distance from baseline toward net
-lateral = position % 100  # XX — left-to-right across court width
+depth   = position // 100  # YY — distance from baseline toward net
+lateral = position  % 100  # XX — left-to-right across court width
 ```
 
 ### Axis ranges
@@ -687,18 +826,6 @@ lateral = position % 100  # XX — left-to-right across court width
 | 4949     | 49 | 49 | Front centre — zone 3                    |
 | 4988     | 49 | 88 | Front right — zone 2                     |
 
-### `setter_call` arc semantics
-
-`x1`, `y1`, `x2` together describe the ball-flight arc of the set:
-
-| Field | Meaning                                                            |
-|-------|--------------------------------------------------------------------|
-| `x1`  | Setter's starting position                                         |
-| `y1`  | Apex of the set arc                                                |
-| `x2`  | Attack target — matches `attack_combination.position` to within ±2 |
-
-When `x1 = y1 = x2 = 0`, the setter call uses `area_list` (a zone polygon) instead.
-
 ---
 
 ## Undecoded Fields
@@ -717,7 +844,7 @@ Fields 0, 1, 3, 4, 5, 7, 8 are unnamed. Only `home_away` (field 6) and `scout_co
 ### `[3ATTACKCOMBINATION]`
 
 | Field   | Observed values | Best guess    | Why unconfirmed                                    |
-|---------|-----------------|---------------|----------------------------------------------------|
+|---------|-----------------|---------------|-----------------------------------------------------|
 | field5  | always empty    | unknown       | No variation to analyse                            |
 | field9  | `1` or empty    | back-row flag | Correlates with back-row attacks but not confirmed |
 | field10 | always empty    | unknown       | No variation to analyse                            |
@@ -772,14 +899,11 @@ Present in the file but not read. No content observed.
 
 ## Known Limitations
 
-- **No official specification.** The format was reverse-engineered from real files. Field positions and meanings are
-  empirically derived and may not hold across all DataVolley versions.
+- **No official specification.** The format was reverse-engineered from real files.
 - **Format version.** Targets DataVolley 4.x format `2.0`. Earlier versions may have different field counts.
-- **Encoding.** Files are Windows-1252. The parser uses `errors="replace"` for robustness; replacement characters
-  may appear in names containing unusual characters.
-- **Round-trip fidelity.** Scout lines are reconstructed from `raw`, not from parsed fields, so the scout section is
-  always lossless. Other sections are reconstructed from parsed fields and may differ in trailing whitespace or empty
-  field representation.
+- **Encoding.** Files are Windows-1252. The parser uses `errors="replace"` for robustness.
+- **Round-trip fidelity.** Scout lines are reconstructed from `raw` (always lossless). Other sections are
+  reconstructed from parsed fields and may differ in trailing whitespace or empty field representation.
 - **Set limit.** Only up to 5 sets are parsed from `[3SET]`.
 - **Special scout events.** Substitution, rotation, and rally-outcome lines are classified but their payload is not
   decoded into structured fields.
@@ -788,4 +912,7 @@ Present in the file but not read. No content observed.
 
 ## TO DO
 
-- Accuracy Index: deterministic 0–100 conversion confidence score.
+- Decode substitution, rotation, and rally-outcome scout lines.
+- Name remaining undecoded `[3MATCH]` / `[3MORE]` / `[3PLAYERS]` fields.
+- Add a test suite with sample `.dvw` files.
+- Support DataVolley format versions other than `2.0`.
