@@ -27,19 +27,6 @@ A minimal, dependency-free Python tool that converts DataVolley `.dvw` scouting 
 
 ---
 
-### v0.1.0 — 2026-05-30
-
-First public release.
-
-**Features**
-
-- Parse DataVolley `.dvw` format 2.0 (Windows-1252) into typed Python dataclasses.
-- Import one or more `.dvw` files into a single SQLite database.
-- Export SQLite database back to `.dvw` with lossless scout-section round-trips.
-- CLI commands: `dvw2db`, `db2dvw`, `info`.
-- All output written to `output/` by default.
-- No third-party dependencies.
-
 **Known gaps (tracked for future releases)**
 
 - Substitution, rotation, and rally-outcome scout lines are classified but not fully decoded.
