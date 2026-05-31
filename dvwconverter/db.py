@@ -414,7 +414,7 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
                  rotation_new_pos,sub_out_jersey,sub_in_jersey,lineup_server_jersey,
                  is_set_start,is_rotation,is_point,is_substitution,
                  is_timeout,is_point_consequence,is_lineup)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 fhid, i, ev.raw,
                 ev.team, ev.player_number, ev.skill, ev.skill_type, ev.evaluation,
                 ev.attack_code, ev.setter_code, ev.start_zone, ev.end_zone,
@@ -625,18 +625,43 @@ def _v(val) -> str:
     return "" if val is None else str(val)
 
 
+def _join(fields: list, trailing_semi: bool = True, min_fields: int = 0) -> str:
+    """Join fields with semicolons, stripping trailing None/empty fields first.
+
+    Preserves the original file's field count: lines end at the last non-empty
+    field (plus one trailing semicolon). min_fields ensures structural empty
+    fields that the format always writes are not trimmed away even when None.
+
+    Args:
+        fields:        Values to join (None → "").
+        trailing_semi: Append a final ";" after the last field.
+        min_fields:    Always emit at least this many fields, padding with ""
+                       when the last non-empty value falls short.
+    """
+    last = max(
+        (i for i, f in enumerate(fields) if f is not None and str(f) != ""),
+        default=-1,
+    )
+    last = max(last, min_fields - 1)
+    trimmed = [_v(f) for f in fields[:last + 1]]
+    result = ";".join(trimmed)
+    if trailing_semi:
+        result += ";"
+    return result
+
+
 def _player_line(p: Player) -> str:
-    return ";".join([
-        _v(p.team_index), _v(p.number), _v(p.player_id),
-        _v(p.starting_position_s1), _v(p.starting_position_s2),
-        _v(p.starting_position_s3), _v(p.field6), _v(p.field7),
-        _v(p.short_name), _v(p.last_name), _v(p.first_name),
-        _v(p.field11), _v(p.special_role), _v(p.role),
+    return _join([
+        p.team_index, p.number, p.player_id,
+        p.starting_position_s1, p.starting_position_s2,
+        p.starting_position_s3, p.field6, p.field7,
+        p.short_name, p.last_name, p.first_name,
+        p.field11, p.special_role, p.role,
         "False" if not p.foreign else "True",
-        _v(p.field15), _v(p.field16),
-        _v(p.encoded_short), _v(p.encoded_last), _v(p.encoded_first),
-        _v(p.field20), _v(p.field21), _v(p.field22), _v(p.field23),
-    ])
+        p.field15, p.field16,
+        p.encoded_short, p.encoded_last, p.encoded_first,
+        p.field20, p.field21, p.field22, p.field23,
+    ], min_fields=17)
 
 
 def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
@@ -646,50 +671,56 @@ def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
 
     h = dvw.header
     L("[3DATAVOLLEYSCOUT]")
-    L(f"FILEFORMAT: {_v(h.file_format)}")
-    L(f"GENERATOR-DAY: {_v(h.generator_day)}")
-    L(f"GENERATOR-IDP: {_v(h.generator_idp)}")
-    L(f"GENERATOR-PRG: {_v(h.generator_prg)}")
-    L(f"GENERATOR-REL: {_v(h.generator_rel)}")
-    L(f"GENERATOR-VER: {_v(h.generator_ver)}")
-    L(f"GENERATOR-NAM: {_v(h.generator_nam)}")
-    L(f"LASTCHANGE-DAY: {_v(h.lastchange_day)}")
-    L(f"LASTCHANGE-IDP: {_v(h.lastchange_idp)}")
-    L(f"LASTCHANGE-PRG: {_v(h.lastchange_prg)}")
-    L(f"LASTCHANGE-REL: {_v(h.lastchange_rel)}")
-    L(f"LASTCHANGE-VER: {_v(h.lastchange_ver)}")
-    L(f"LASTCHANGE-NAM: {_v(h.lastchange_nam)}")
+    # Only emit key-value lines that were present in the original file
+    for key, val in [
+        ("FILEFORMAT",     h.file_format),
+        ("GENERATOR-DAY",  h.generator_day),
+        ("GENERATOR-IDP",  h.generator_idp),
+        ("GENERATOR-PRG",  h.generator_prg),
+        ("GENERATOR-REL",  h.generator_rel),
+        ("GENERATOR-VER",  h.generator_ver),
+        ("GENERATOR-NAM",  h.generator_nam),
+        ("LASTCHANGE-DAY", h.lastchange_day),
+        ("LASTCHANGE-IDP", h.lastchange_idp),
+        ("LASTCHANGE-PRG", h.lastchange_prg),
+        ("LASTCHANGE-REL", h.lastchange_rel),
+        ("LASTCHANGE-VER", h.lastchange_ver),
+        ("LASTCHANGE-NAM", h.lastchange_nam),
+    ]:
+        if val is not None:
+            L(f"{key}: {val}")
 
     m = dvw.match
     L("[3MATCH]")
-    L(";".join([_v(m.date),_v(m.time),_v(m.season),_v(m.league),_v(m.phase),
-                _v(m.home_indicator),_v(m.match_number),_v(m.federation_match_id),
-                _v(m.codepage),_v(m.field9),_v(m.category_code),_v(m.field11),
-                _v(m.encoded_league),_v(m.encoded_phase),"",]))
-    L(";".join([_v(m.field_l2_0),_v(m.field_l2_1),_v(m.competition_code),
-                _v(m.field_l2_3),_v(m.field_l2_4),_v(m.field_l2_5),
-                _v(m.home_away),_v(m.opponent_home_away),_v(m.field_l2_8),
-                _v(m.scout_license_id),"",]))
+    L(_join([m.date,m.time,m.season,m.league,m.phase,
+             m.home_indicator,m.match_number,m.federation_match_id,
+             m.codepage,m.field9,m.category_code,m.field11,
+             m.encoded_league,m.encoded_phase]))
+    L(_join([m.field_l2_0,m.field_l2_1,m.competition_code,
+             m.field_l2_3,m.field_l2_4,m.field_l2_5,
+             m.home_away,m.opponent_home_away,m.field_l2_8,
+             m.scout_license_id], min_fields=6))
 
     L("[3TEAMS]")
     for t in dvw.teams:
-        L(";".join([_v(t.team_id),_v(t.team_name),_v(t.sets_won),
-                    _v(t.coach),_v(t.assistant_coach),_v(t.team_color),
-                    _v(t.encoded_name),_v(t.encoded_coach),_v(t.encoded_asst_coach),]))
+        L(_join([t.team_id,t.team_name,t.sets_won,
+                 t.coach,t.assistant_coach,t.team_color,
+                 t.encoded_name,t.encoded_coach,t.encoded_asst_coach]))
 
     mi = dvw.more
     L("[3MORE]")
-    L(";".join([_v(mi.field0),_v(mi.field1),_v(mi.field2),_v(mi.city),
-                _v(mi.venue),_v(mi.referee),_v(mi.encoded_field6),
-                _v(mi.encoded_city),_v(mi.encoded_field8),_v(mi.encoded_referee),]))
-    L(f"{_v(mi.internal_ids)};{_v(mi.duration1)};{_v(mi.duration2)};")
+    L(_join([mi.field0,mi.field1,mi.field2,mi.city,
+             mi.venue,mi.referee,mi.encoded_field6,
+             mi.encoded_city,mi.encoded_field8,mi.encoded_referee], min_fields=6))
+    L(_join([mi.internal_ids,mi.duration1,mi.duration2]))
 
     L("[3COMMENTS]")
     L(dvw.comments or "no comments")
 
     L("[3SET]")
     for s in dvw.sets:
-        L(";".join(["True",_v(s.score_8),_v(s.score_16),_v(s.score_21),
+        L(";".join([_v(s.played) if s.played is not None else "True",
+                    _v(s.score_8),_v(s.score_16),_v(s.score_21),
                     _v(s.final_score),_v(s.duration),"",]))
 
     L("[3PLAYERS-H]")

@@ -44,7 +44,7 @@ def compute_accuracy(dvw: DvwFile) -> AccuracyReport:
     Where:
       C_skill   = fraction of skill events with (team + player + skill) parsed
       C_header  = (has_teams + has_players + has_sets) / 3
-      C_score   = fraction of skill events that carry home_score/visiting_score
+      C_score   = fraction of skill events that carry point_home_score/point_visiting_score
       C_volume  = min(total_events / MIN_EVENTS, 1.0)  — penalises near-empty files
 
     Weights: w1=0.50  w2=0.20  w3=0.20  w4=0.10
@@ -95,7 +95,7 @@ def compute_accuracy(dvw: DvwFile) -> AccuracyReport:
     if n_skill:
         with_score = sum(
             1 for e in skill_events
-            if e.home_score is not None and e.visiting_score is not None
+            if e.point_home_score is not None and e.point_visiting_score is not None
         )
         c_score = with_score / n_skill
     else:

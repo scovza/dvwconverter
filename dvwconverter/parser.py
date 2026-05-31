@@ -366,11 +366,16 @@ class DvwFile:
 # ── section parsers ───────────────────────────────────────────────────────────
 
 def _parse_header(lines: list[str]) -> FileHeader:
+    # Map the literal key names in the file to FileHeader field names.
+    # Most follow WORD-WORD → word_word via hyphen→underscore, but
+    # FILEFORMAT has no hyphen so it needs an explicit alias.
+    _ALIASES = {"fileformat": "file_format"}
     h = FileHeader()
     for line in lines:
         if ":" in line:
             key, _, val = line.partition(":")
             key = key.strip().lower().replace("-", "_")
+            key = _ALIASES.get(key, key)
             val = val.strip()
             if hasattr(h, key):
                 setattr(h, key, val or None)
@@ -440,7 +445,10 @@ def _parse_more(lines: list[str]) -> MoreInfo:
         ]
         for i, name in enumerate(names):
             if i < len(p):
-                setattr(m, name, _str(p[i]))
+                # field0 may be a bare space (' ') used as a placeholder —
+                # preserve it as-is so the round-trip reconstructs the same line.
+                val = p[i] if name == "field0" else _str(p[i])
+                setattr(m, name, val if val != "" else None)
     if len(lines) >= 2:
         p = _split(lines[1])
         # field[0]: space-separated DataVolley platform record IDs (optional)

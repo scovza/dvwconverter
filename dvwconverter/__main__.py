@@ -98,8 +98,38 @@ def cmd_dvw2db(args: argparse.Namespace) -> int:
             if getattr(args, "verbose", False):
                 print(rt.format_report())
 
+        except FileNotFoundError as exc:
+            print(f"FAILED – file not found: {exc.filename}", file=sys.stderr)
+            errors += 1
+        except sqlite3.OperationalError as exc:
+            msg = str(exc)
+            # Diagnose the common placeholder/column mismatch
+            import re as _re
+            m = _re.search(r'(\d+) values for (\d+) columns', msg)
+            if m:
+                vals, cols = int(m.group(1)), int(m.group(2))
+                print(
+                    f"FAILED – database schema mismatch: INSERT supplies {vals} values "
+                    f"for {cols} columns (schema/code out of sync; try re-importing)",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"FAILED – database error: {msg}", file=sys.stderr)
+            errors += 1
+        except UnicodeDecodeError as exc:
+            print(
+                f"FAILED – encoding error in {src_path.name}: "
+                f"unexpected byte at position {exc.start} "
+                f"(file may not be Windows-1252)",
+                file=sys.stderr,
+            )
+            errors += 1
         except Exception as exc:
-            print(f"FAILED – {exc}", file=sys.stderr)
+            exc_type = type(exc).__name__
+            print(f"FAILED – {exc_type}: {exc}", file=sys.stderr)
+            if getattr(args, 'verbose', False):
+                import traceback
+                traceback.print_exc()
             errors += 1
 
     print(f"\nDatabase     : {db_path}")
@@ -197,10 +227,12 @@ def cmd_info(args: argparse.Namespace) -> int:
 # ── parser ────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
     p = argparse.ArgumentParser(
-        prog="dvwconverter__main__",
+        prog="dvwconverter",
         description="Convert DataVolley .dvw scouting files to/from SQLite.",
     )
+    p.add_argument("--version", action="version", version=f"dvwconverter {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
     p1 = sub.add_parser(

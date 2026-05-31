@@ -11,4 +11,9 @@ __all__ = [
     "compute_accuracy", "AccuracyReport",
     "roundtrip_accuracy", "roundtrip_from_recon", "RoundTripReport", "SectionDiff",
 ]
-__version__ = "0.2.0"
+try:
+    from importlib.metadata import version as _version
+    __version__ = _version("dvwconverter")
+except Exception:
+    from pathlib import Path as _Path
+    __version__ = (_Path(__file__).parent.parent / "VERSION").read_text().strip()
