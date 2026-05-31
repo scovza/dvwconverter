@@ -51,31 +51,64 @@ class FileHeader:
 
 @dataclass
 class MatchInfo:
-    """Match header from [3MATCH] (two semicolon-delimited lines)."""
+    """Match header from [3MATCH] (two semicolon-delimited lines).
+
+    Line 1 fields (index 0-13):
+      0  date, 1 time, 2 season, 3 league, 4 phase,
+      5  home_indicator  ("Interno"=home, "Esterno"=away; empty=unset),
+      6  match_number,
+      7  federation_match_id  (numeric ID from the federation/DV platform),
+      8  codepage,
+      9  field9  (constant "1" across observed files; meaning unknown),
+      10 category_code  (constant "Z" across observed files; competition type),
+      11 field11  (constant "0"; unknown boolean flag),
+      12 encoded_league  (\x0f2+hex duplicate of league field),
+      13 encoded_phase   (\x0f2+hex duplicate of phase field)
+
+    Line 2 fields (index 0-9):
+      0  field_l2_0, 1 field_l2_1,
+      2  competition_code  (e.g. "46137"; league/competition registration ID –
+                            NOT a venue code; identical across all files in the
+                            same competition),
+      3  field_l2_3, 4 field_l2_4, 5 field_l2_5,
+      6  home_away  ("L"=locale/home, "R"=remote/visiting; perspective team),
+      7  opponent_home_away  ("L"/"R"; mirror of home_away for the opponent),
+      8  field_l2_8,
+      9  scout_license_id  (numeric DV software license / operator ID)
+    """
     date: Optional[str] = None
     time: Optional[str] = None
     season: Optional[str] = None
     league: Optional[str] = None
     phase: Optional[str] = None
-    field5: Optional[str] = None
+    # line1[5]: "Interno"=home venue, "Esterno"=away, empty=not specified
+    home_indicator: Optional[str] = None
     match_number: Optional[int] = None
-    field7: Optional[str] = None
+    # line1[7]: federation or DataVolley platform match ID
+    federation_match_id: Optional[int] = None
     codepage: Optional[int] = None
+    # line1[9]: constant "1" in all observed files; meaning unknown
     field9: Optional[str] = None
-    field10: Optional[str] = None
+    # line1[10]: constant "Z" in all observed files; competition/category code
+    category_code: Optional[str] = None
+    # line1[11]: constant "0" in all observed files; unknown flag
     field11: Optional[str] = None
     encoded_league: Optional[str] = None
     encoded_phase: Optional[str] = None
     field_l2_0: Optional[str] = None
     field_l2_1: Optional[str] = None
-    venue_code: Optional[str] = None
+    # line2[2]: competition/league registration code (was incorrectly named venue_code)
+    competition_code: Optional[str] = None
     field_l2_3: Optional[str] = None
     field_l2_4: Optional[str] = None
     field_l2_5: Optional[str] = None
-    home_away: Optional[str] = None     # L=local/home, V=visitor
-    field_l2_7: Optional[str] = None
+    # line2[6]: "L"=perspective team is home, "R"=perspective team is visiting
+    home_away: Optional[str] = None
+    # line2[7]: home/away status of the *opponent* team (mirror of home_away)
+    opponent_home_away: Optional[str] = None
     field_l2_8: Optional[str] = None
-    scout_code: Optional[str] = None
+    # line2[9]: numeric DataVolley license/operator ID for the scout who created the file
+    scout_license_id: Optional[int] = None
 
 
 @dataclass
@@ -99,21 +132,31 @@ class MoreInfo:
     field1: Optional[str] = None
     field2: Optional[str] = None
     city: Optional[str] = None
-    field4: Optional[str] = None
+    venue: Optional[str] = None         # field[4]: venue/arena name
     referee: Optional[str] = None
     encoded_field6: Optional[str] = None
     encoded_city: Optional[str] = None
     encoded_field8: Optional[str] = None
     encoded_referee: Optional[str] = None
+    # line2[0]: space-separated DataVolley platform record IDs (observed in one file only)
+    internal_ids: Optional[str] = None
+    # line2[1-2]: suspected timing data (warm-up / break duration?); semantics unresolved
     duration1: Optional[int] = None
     duration2: Optional[int] = None
 
 
 @dataclass
 class SetScore:
-    """Score snapshots for one set from [3SET]."""
+    """Score snapshots for one set from [3SET].
+
+    All score fields are in visiting-first order: "visiting-home"
+    (e.g. "25-21" means visiting scored 25, home scored 21).
+    This is the *opposite* of the [3TEAMS] ordering where the home
+    team is listed first.
+    """
     set_number: int = 0
     played: Optional[bool] = None
+    # scores are "visiting_score-home_score" (visiting team first)
     score_8: Optional[str] = None
     score_16: Optional[str] = None
     score_21: Optional[str] = None
@@ -123,7 +166,22 @@ class SetScore:
 
 @dataclass
 class Player:
-    """Player roster entry from [3PLAYERS-H] or [3PLAYERS-V]."""
+    """Player roster entry from [3PLAYERS-H] or [3PLAYERS-V].
+
+    field[12] (special_role):
+      "L" = Libero (team's designated libero)
+      "C" = Captain (one per team; orthogonal to role)
+      ""  = Standard player (no special designation)
+
+    field[13] (role):
+      1=Libero, 2=Outside Hitter, 3=Middle Blocker,
+      4=Opposite Hitter, 5=Setter
+
+    fields[17-19] (\x0f2+hex encoded duplicates; redundant with plaintext):
+      field[17] = encoded short_name
+      field[18] = encoded last_name   (was encoded_last at index 18)
+      field[19] = encoded first_name  (was encoded_first at index 19)
+    """
     team_index: int = 0             # 0=home, 1=visiting
     number: Optional[int] = None
     player_id: int = 0              # sequential across both rosters
@@ -136,12 +194,14 @@ class Player:
     last_name: Optional[str] = None
     first_name: Optional[str] = None
     field11: Optional[str] = None
-    field12: Optional[str] = None
+    # "L"=Libero, "C"=Captain, ""=standard player
+    special_role: Optional[str] = None
     role: Optional[int] = None      # 1=libero 2=OH 3=MB 4=opp 5=setter
     foreign: Optional[bool] = None
     field15: Optional[str] = None
     field16: Optional[str] = None
-    field17: Optional[str] = None
+    # fields[17-19]: \x0f2+hex encoded duplicates of short_name/last/first
+    encoded_short: Optional[str] = None
     encoded_last: Optional[str] = None
     encoded_first: Optional[str] = None
     field20: Optional[str] = None
@@ -163,7 +223,8 @@ class AttackCombination:
     # packed court position: YYXX where YY=depth (34=baseline…50=net),
     # XX=lateral (12=zone4/5 left … 50=center … 88=zone1/2 right)
     position: Optional[int] = None
-    attacker_position: Optional[str] = None  # F B C S P -
+    attacker_position: Optional[str] = None  # F=front-row, B=back-row, C S P -
+    # field9: suspected back-row flag ("1"=back-row); unconfirmed
     field9: Optional[str] = None
     field10: Optional[str] = None
 
@@ -198,12 +259,31 @@ class ScoutEvent:
 
     Regular skill line format:
         [*|a]<nn><skill>[type][eval][attack|setter][~zone~target][specials]
-        ;[custom1];[custom2];;;;;;[video_time];[set];[score_h];[score_v];[serving];[frame];;[rot_h];[rot_v];
+        ;[custom1];[custom2];;;;;;[video_time];[set];[home_rot_pos];[visiting_rot_pos];[serving];[frame];;[rot_h1..6];[rot_v1..6];
 
     Prefix: * = visiting team, a = home team.
     Special prefixes: **Nset=set boundary, *z/az=rotation, *p/ap=point,
                       ac/*c=substitution, aT/*T=timeout, $$&=rally outcome,
                       *P/aP=lineup declaration.
+
+    IMPORTANT – tail fields 9 and 10 (home_rotation_pos / visiting_rotation_pos):
+        These store the current *rotation position* (1–6) of each team,
+        NOT the match score. Actual running scores are found in the body
+        of *p / ap point lines as "visiting_score:home_score".
+
+    Rotation tail fields 14–25 are 12 individual jersey-number fields:
+        positions 14–19 = home team rotation slots 1–6
+        positions 20–25 = visiting team rotation slots 1–6
+
+    Set scores in [3SET] and point-line bodies use visiting-first ordering.
+
+    Special-line formats:
+        *z3 / az3        — rotation: team rotated to position 3
+        *p15:12 / ap…    — point scored; body = "visiting:home" running score
+                           (*=visiting scored, a=home scored)
+        *c12:17 / ac…    — substitution: jersey 12 out, jersey 17 in
+        *P18>LUp / aP…   — lineup declaration at set start (jersey=server)
+        a$$&H# / *$$&H=  — rally outcome: H=hard attack, #=kill, ==opponent error
     """
     raw: str = ""
 
@@ -222,12 +302,25 @@ class ScoutEvent:
     custom2: Optional[str] = None
     video_time: Optional[str] = None
     set_number: Optional[int] = None
-    home_score: Optional[int] = None
-    visiting_score: Optional[int] = None
+    # tail[9]: home team current rotation position (1–6), NOT match score
+    home_rotation_pos: Optional[int] = None
+    # tail[10]: visiting team current rotation position (1–6), NOT match score
+    visiting_rotation_pos: Optional[int] = None
     serving_team: Optional[int] = None  # 1=home, 0=visiting
     video_frame: Optional[int] = None
-    rotation_home: Optional[str] = None
-    rotation_visiting: Optional[str] = None
+    # Individual rotation jersey fields (tail positions 14–19 and 20–25)
+    rotation_home_1: Optional[int] = None
+    rotation_home_2: Optional[int] = None
+    rotation_home_3: Optional[int] = None
+    rotation_home_4: Optional[int] = None
+    rotation_home_5: Optional[int] = None
+    rotation_home_6: Optional[int] = None
+    rotation_visiting_1: Optional[int] = None
+    rotation_visiting_2: Optional[int] = None
+    rotation_visiting_3: Optional[int] = None
+    rotation_visiting_4: Optional[int] = None
+    rotation_visiting_5: Optional[int] = None
+    rotation_visiting_6: Optional[int] = None
 
     is_set_start: bool = False
     is_rotation: bool = False
@@ -236,6 +329,18 @@ class ScoutEvent:
     is_timeout: bool = False
     is_point_consequence: bool = False
     is_lineup: bool = False
+
+    # Parsed fields for special event types
+    # For is_point=True: running score extracted from body (*p / ap lines)
+    point_visiting_score: Optional[int] = None
+    point_home_score: Optional[int] = None
+    # For is_rotation=True: new rotation position
+    rotation_new_pos: Optional[int] = None
+    # For is_substitution=True: players in/out
+    sub_out_jersey: Optional[int] = None
+    sub_in_jersey: Optional[int] = None
+    # For is_lineup=True: jersey number of the server
+    lineup_server_jersey: Optional[int] = None
 
 
 @dataclass
@@ -247,6 +352,8 @@ class DvwFile:
     teams: list[Team] = field(default_factory=list)
     more: MoreInfo = field(default_factory=MoreInfo)
     comments: str = ""
+    # Per-set comments (up to 5); semicolon-separated in the source file
+    set_comments: list[str] = field(default_factory=list)
     sets: list[SetScore] = field(default_factory=list)
     players: list[Player] = field(default_factory=list)
     attack_combinations: list[AttackCombination] = field(default_factory=list)
@@ -275,24 +382,39 @@ def _parse_match(lines: list[str]) -> MatchInfo:
     if lines:
         p = _split(lines[0])
         fields_l1 = [
-            "date", "time", "season", "league", "phase", "field5",
-            "match_number", "field7", "codepage", "field9", "field10",
-            "field11", "encoded_league", "encoded_phase",
+            "date", "time", "season", "league", "phase",
+            "home_indicator",       # "Interno"=home, "Esterno"=away
+            "match_number",
+            "federation_match_id",  # numeric federation/DV platform match ID
+            "codepage",
+            "field9",               # constant "1"; meaning unknown
+            "category_code",        # constant "Z"; competition/category code
+            "field11",              # constant "0"; unknown flag
+            "encoded_league",
+            "encoded_phase",
         ]
+        int_fields = {"match_number", "federation_match_id", "codepage"}
         for i, name in enumerate(fields_l1):
             if i < len(p):
-                val = _int(p[i]) if name in ("match_number", "codepage") else _str(p[i])
+                val = _int(p[i]) if name in int_fields else _str(p[i])
                 setattr(m, name, val)
     if len(lines) >= 2:
         p = _split(lines[1])
         fields_l2 = [
-            "field_l2_0", "field_l2_1", "venue_code", "field_l2_3",
-            "field_l2_4", "field_l2_5", "home_away", "field_l2_7",
-            "field_l2_8", "scout_code",
+            "field_l2_0", "field_l2_1",
+            "competition_code",     # league/competition registration code (was venue_code)
+            "field_l2_3", "field_l2_4", "field_l2_5",
+            "home_away",            # "L"=perspective team is home, "R"=visiting
+            "opponent_home_away",   # mirror of home_away for the opponent
+            "field_l2_8",
+            "scout_license_id",     # numeric DV license/operator ID
         ]
         for i, name in enumerate(fields_l2):
             if i < len(p):
-                setattr(m, name, _str(p[i]))
+                if name == "scout_license_id":
+                    setattr(m, name, _int(p[i]))
+                else:
+                    setattr(m, name, _str(p[i]))
     return m
 
 
@@ -311,7 +433,9 @@ def _parse_more(lines: list[str]) -> MoreInfo:
     if lines:
         p = _split(lines[0])
         names = [
-            "field0", "field1", "field2", "city", "field4", "referee",
+            "field0", "field1", "field2", "city",
+            "venue",            # field[4]: venue/arena name
+            "referee",
             "encoded_field6", "encoded_city", "encoded_field8", "encoded_referee",
         ]
         for i, name in enumerate(names):
@@ -319,6 +443,8 @@ def _parse_more(lines: list[str]) -> MoreInfo:
                 setattr(m, name, _str(p[i]))
     if len(lines) >= 2:
         p = _split(lines[1])
+        # field[0]: space-separated DataVolley platform record IDs (optional)
+        m.internal_ids = _str(p[0]) if len(p) > 0 else None
         m.duration1 = _int(p[1]) if len(p) > 1 else None
         m.duration2 = _int(p[2]) if len(p) > 2 else None
     return m
@@ -331,6 +457,7 @@ def _parse_sets(lines: list[str]) -> list[SetScore]:
         result.append(SetScore(
             set_number=i + 1,
             played=_bool(p[0]) if p else None,
+            # All score fields are "visiting_score-home_score" (visiting first)
             score_8=_str(p[1]) if len(p) > 1 else None,
             score_16=_str(p[2]) if len(p) > 2 else None,
             score_21=_str(p[3]) if len(p) > 3 else None,
@@ -338,6 +465,23 @@ def _parse_sets(lines: list[str]) -> list[SetScore]:
             duration=_int(p[5]) if len(p) > 5 else None,
         ))
     return result
+
+
+def _parse_comments(text: str) -> tuple[str, list[str]]:
+    """Parse [3COMMENTS] content.
+
+    Returns (raw_text, per_set_comments).  When the file stores
+    per-set comments the raw text contains semicolon-separated entries
+    (one per set played).  An empty entry or the literal "no comments"
+    means no comment was recorded for that set.
+    """
+    raw = text.strip()
+    if ";" in raw:
+        parts = [p.strip() for p in raw.split(";") if p.strip()]
+        set_comments = [p for p in parts if p.lower() != "no comments"]
+    else:
+        set_comments = []
+    return raw, set_comments
 
 
 def _parse_player(line: str, team_index: int) -> Player:
@@ -349,9 +493,18 @@ def _parse_player(line: str, team_index: int) -> Player:
         starting_position_s1=g(3), starting_position_s2=g(4),
         starting_position_s3=g(5), field6=g(6), field7=g(7),
         short_name=g(8), last_name=g(9), first_name=g(10),
-        field11=g(11), field12=g(12), role=g(13, _int),
-        foreign=g(14, _bool), field15=g(15), field16=g(16), field17=g(17),
-        encoded_last=g(18), encoded_first=g(19),
+        field11=g(11),
+        # field[12]: "L"=Libero, "C"=Captain, ""=standard player
+        special_role=g(12),
+        role=g(13, _int),
+        foreign=g(14, _bool),
+        field15=g(15), field16=g(16),
+        # field[17]: encoded short_name (\x0f2+hex)
+        encoded_short=g(17),
+        # field[18]: encoded last_name (\x0f2+hex)
+        encoded_last=g(18),
+        # field[19]: encoded first_name (\x0f2+hex)
+        encoded_first=g(19),
         field20=g(20), field21=g(21), field22=g(22), field23=g(23),
     )
 
@@ -401,8 +554,9 @@ def _parse_scout_event(line: str) -> ScoutEvent:  # noqa: C901
         p = raw.split(";")
         if len(p) >= 11:
             ev.set_number = _int(p[8])
-            ev.home_score = _int(p[9])
-            ev.visiting_score = _int(p[10])
+            # tail[9] and [10] = rotation positions, not scores
+            ev.home_rotation_pos = _int(p[9])
+            ev.visiting_rotation_pos = _int(p[10])
         return ev
 
     parts = raw.split(";")
@@ -411,32 +565,95 @@ def _parse_scout_event(line: str) -> ScoutEvent:  # noqa: C901
         ev.custom2 = _str(parts[2])
         ev.video_time = _str(parts[7])
         ev.set_number = _int(parts[8])
-        ev.home_score = _int(parts[9])
-        ev.visiting_score = _int(parts[10])
+        # tail[9] = home rotation position (1–6), NOT the score
+        ev.home_rotation_pos = _int(parts[9])
+        # tail[10] = visiting rotation position (1–6), NOT the score
+        ev.visiting_rotation_pos = _int(parts[10])
         ev.serving_team = _int(parts[11])
         ev.video_frame = _int(parts[12])
-        ev.rotation_home = _str(parts[14])
-        ev.rotation_visiting = _str(parts[15]) if len(parts) > 15 else None
+        # tail[13] is always empty (structural separator); skip it
+        # tail[14-19] = home rotation jerseys (6 individual fields)
+        if len(parts) > 14:
+            ev.rotation_home_1 = _int(parts[14])
+        if len(parts) > 15:
+            ev.rotation_home_2 = _int(parts[15])
+        if len(parts) > 16:
+            ev.rotation_home_3 = _int(parts[16])
+        if len(parts) > 17:
+            ev.rotation_home_4 = _int(parts[17])
+        if len(parts) > 18:
+            ev.rotation_home_5 = _int(parts[18])
+        if len(parts) > 19:
+            ev.rotation_home_6 = _int(parts[19])
+        # tail[20-25] = visiting rotation jerseys (6 individual fields)
+        if len(parts) > 20:
+            ev.rotation_visiting_1 = _int(parts[20])
+        if len(parts) > 21:
+            ev.rotation_visiting_2 = _int(parts[21])
+        if len(parts) > 22:
+            ev.rotation_visiting_3 = _int(parts[22])
+        if len(parts) > 23:
+            ev.rotation_visiting_4 = _int(parts[23])
+        if len(parts) > 24:
+            ev.rotation_visiting_5 = _int(parts[24])
+        if len(parts) > 25:
+            ev.rotation_visiting_6 = _int(parts[25])
 
     body = parts[0] if parts else raw
 
+    # rotation: *z3 or az3 — team rotated to position N
     if body.startswith(("*z", "az")):
         ev.is_rotation = True
+        ev.team = "V" if body[0] == "*" else "H"
+        ev.rotation_new_pos = _int(body[2:])
         return ev
+
+    # point: *p or ap — score in body as "visiting:home"
+    # *=visiting scored, a=home scored
     if body.startswith(("*p", "ap")):
         ev.is_point = True
+        ev.team = "V" if body[0] == "*" else "H"
+        score_str = body[2:]
+        m = re.match(r"(\d+):(\d+)", score_str)
+        if m:
+            ev.point_visiting_score = int(m.group(1))
+            ev.point_home_score = int(m.group(2))
         return ev
+
+    # substitution: *c12:17 or ac12:17 — jersey out:in
     if body.startswith(("ac", "*c")):
         ev.is_substitution = True
+        ev.team = "V" if body[0] == "*" else "H"
+        m = re.match(r"[a*]c(\d+):(\d+)", body)
+        if m:
+            ev.sub_out_jersey = int(m.group(1))
+            ev.sub_in_jersey = int(m.group(2))
         return ev
+
+    # timeout
     if body in ("aT", "*T"):
         ev.is_timeout = True
+        ev.team = "V" if body[0] == "*" else "H"
         return ev
+
+    # rally outcome: a$$&H# or *$$&H=
+    # team prefix + $$& + skill(H=Hard) + eval(#=kill, ==opponent error)
     if "$$&" in body:
         ev.is_point_consequence = True
+        ev.team = "V" if body.startswith("*") else "H"
+        m = re.match(r"[a*]\$\$&([A-Z])([#=])", body)
+        if m:
+            ev.skill = m.group(1)       # H = Hard attack
+            ev.evaluation = m.group(2)  # # = kill/point, = = opponent error
         return ev
+
+    # lineup declaration: *P18>LUp or aP18>LUp (set start or mid-set change)
     if ">LUp" in body or body.startswith(("aP", "*P")):
         ev.is_lineup = True
+        ev.team = "V" if body[0] == "*" else "H"
+        m = re.match(r"[a*]P(\d+)", body)
+        if m:
+            ev.lineup_server_jersey = int(m.group(1))
         return ev
 
     # regular skill event: [*|a]<nn><skill>[type][eval]...
@@ -507,7 +724,8 @@ def parse_dvw(path: str) -> DvwFile:
         elif section == "MORE":
             dvw.more = _parse_more(data)
         elif section == "COMMENTS":
-            dvw.comments = "\n".join(data)
+            raw_text = "\n".join(data)
+            dvw.comments, dvw.set_comments = _parse_comments(raw_text)
         elif section == "SET":
             dvw.sets = _parse_sets(data)
         elif section == "PLAYERS-H":

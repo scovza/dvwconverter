@@ -1,4 +1,4 @@
-"""dvwconverter – DataVolley .dvw ↔ SQLite converter."""
+"""dvwconverter__main__ – DataVolley .dvw ↔ SQLite converter."""
 
 from .parser import parse_dvw, DvwFile
 from .db import dvw_to_db, db_to_dvw

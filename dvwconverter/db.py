@@ -42,36 +42,46 @@ CREATE TABLE IF NOT EXISTS match (
     phase             TEXT,
     match_number      INTEGER,
     codepage          INTEGER,
-    venue_code        TEXT,
-    home_away         TEXT,
-    scout_code        TEXT,
+    -- "Interno"=home venue, "Esterno"=away, empty=not specified
+    home_indicator    TEXT,
+    -- Numeric ID assigned by the federation or DataVolley platform
+    federation_match_id INTEGER,
+    -- Constant "1" across all observed files; meaning unknown
+    field9            TEXT,
+    -- Constant "Z" across all observed files; competition/category code
+    category_code     TEXT,
+    -- Constant "0"; unknown flag
+    field11           TEXT,
     encoded_league    TEXT,
     encoded_phase     TEXT,
-    field5            TEXT,
-    field7            TEXT,
-    field9            TEXT,
-    field10           TEXT,
-    field11           TEXT,
     field_l2_0        TEXT,
     field_l2_1        TEXT,
+    -- League/competition registration code (was incorrectly named venue_code)
+    competition_code  TEXT,
     field_l2_3        TEXT,
     field_l2_4        TEXT,
     field_l2_5        TEXT,
-    field_l2_7        TEXT,
-    field_l2_8        TEXT
+    -- "L"=perspective team is home, "R"=visiting
+    home_away         TEXT,
+    -- Mirror of home_away for the opponent team
+    opponent_home_away TEXT,
+    field_l2_8        TEXT,
+    -- Numeric DataVolley software license / operator ID for the scout
+    scout_license_id  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS more_info (
     id                INTEGER PRIMARY KEY,
     file_header_id    INTEGER REFERENCES file_header(id),
     city              TEXT,
+    venue             TEXT,
     referee           TEXT,
+    internal_ids      TEXT,
     duration1         INTEGER,
     duration2         INTEGER,
     field0            TEXT,
     field1            TEXT,
     field2            TEXT,
-    field4            TEXT,
     encoded_field6    TEXT,
     encoded_city      TEXT,
     encoded_field8    TEXT,
@@ -128,10 +138,12 @@ CREATE TABLE IF NOT EXISTS player (
     field6            TEXT,
     field7            TEXT,
     field11           TEXT,
-    field12           TEXT,
+    -- "L"=Libero, "C"=Captain, ""=standard player
+    special_role      TEXT,
     field15           TEXT,
     field16           TEXT,
-    field17           TEXT,
+    -- \x0f2+hex encoded duplicates (redundant with plaintext name fields)
+    encoded_short     TEXT,
     encoded_last      TEXT,
     encoded_first     TEXT,
     field20           TEXT,
@@ -139,6 +151,10 @@ CREATE TABLE IF NOT EXISTS player (
     field22           TEXT,
     field23           TEXT
 );
+
+-- NOTE: All score fields in set_score are "visiting_score-home_score" (visiting first).
+-- This is the OPPOSITE of [3TEAMS] ordering where home is listed first.
+-- e.g. final_score "25-21" means visiting scored 25, home scored 21.
 
 CREATE TABLE IF NOT EXISTS attack_combination (
     id                INTEGER PRIMARY KEY,
@@ -204,13 +220,36 @@ CREATE TABLE IF NOT EXISTS scout_event (
     custom2           TEXT,
     video_time        TEXT,
     set_number        INTEGER,
-    home_score        INTEGER,
-    visiting_score    INTEGER,
-    serving_team      INTEGER,
-    video_frame       INTEGER,
-    rotation_home     TEXT,
-    rotation_visiting TEXT,
-    is_set_start      INTEGER,
+    -- IMPORTANT: these are rotation positions (1-6), NOT match scores
+    -- Actual running scores are in point_visiting_score / point_home_score (parsed from *p/ap lines)
+    home_rotation_pos   INTEGER,
+    visiting_rotation_pos INTEGER,
+    serving_team        INTEGER,
+    video_frame         INTEGER,
+    -- 12 individual jersey fields: home slots 1-6, visiting slots 1-6
+    rotation_home_1     INTEGER,
+    rotation_home_2     INTEGER,
+    rotation_home_3     INTEGER,
+    rotation_home_4     INTEGER,
+    rotation_home_5     INTEGER,
+    rotation_home_6     INTEGER,
+    rotation_visiting_1 INTEGER,
+    rotation_visiting_2 INTEGER,
+    rotation_visiting_3 INTEGER,
+    rotation_visiting_4 INTEGER,
+    rotation_visiting_5 INTEGER,
+    rotation_visiting_6 INTEGER,
+    -- Parsed from *p/ap body: running score at time of point (visiting:home ordering)
+    point_visiting_score INTEGER,
+    point_home_score     INTEGER,
+    -- Parsed from *z/az: new rotation position after rotation
+    rotation_new_pos     INTEGER,
+    -- Parsed from *c/ac: substitution jerseys
+    sub_out_jersey       INTEGER,
+    sub_in_jersey        INTEGER,
+    -- Parsed from *P/aP: jersey of the server in lineup
+    lineup_server_jersey INTEGER,
+    is_set_start        INTEGER,
     is_rotation       INTEGER,
     is_point          INTEGER,
     is_substitution   INTEGER,
@@ -253,29 +292,32 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
         cur.execute("""
             INSERT INTO match
             (file_header_id,date,time,season,league,phase,
-             match_number,codepage,venue_code,home_away,scout_code,
+             match_number,codepage,home_indicator,federation_match_id,
+             field9,category_code,field11,
              encoded_league,encoded_phase,
-             field5,field7,field9,field10,field11,
-             field_l2_0,field_l2_1,field_l2_3,field_l2_4,
-             field_l2_5,field_l2_7,field_l2_8)
+             field_l2_0,field_l2_1,competition_code,
+             field_l2_3,field_l2_4,field_l2_5,
+             home_away,opponent_home_away,field_l2_8,scout_license_id)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
             fhid, m.date, m.time, m.season, m.league, m.phase,
-            m.match_number, m.codepage, m.venue_code, m.home_away, m.scout_code,
+            m.match_number, m.codepage, m.home_indicator, m.federation_match_id,
+            m.field9, m.category_code, m.field11,
             m.encoded_league, m.encoded_phase,
-            m.field5, m.field7, m.field9, m.field10, m.field11,
-            m.field_l2_0, m.field_l2_1, m.field_l2_3, m.field_l2_4,
-            m.field_l2_5, m.field_l2_7, m.field_l2_8,
+            m.field_l2_0, m.field_l2_1, m.competition_code,
+            m.field_l2_3, m.field_l2_4, m.field_l2_5,
+            m.home_away, m.opponent_home_away, m.field_l2_8, m.scout_license_id,
         ))
 
         mi = dvw.more
         cur.execute("""
             INSERT INTO more_info
-            (file_header_id,city,referee,duration1,duration2,
-             field0,field1,field2,field4,
+            (file_header_id,city,venue,referee,internal_ids,duration1,duration2,
+             field0,field1,field2,
              encoded_field6,encoded_city,encoded_field8,encoded_referee)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-            fhid, mi.city, mi.referee, mi.duration1, mi.duration2,
-            mi.field0, mi.field1, mi.field2, mi.field4,
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+            fhid, mi.city, mi.venue, mi.referee, mi.internal_ids,
+            mi.duration1, mi.duration2,
+            mi.field0, mi.field1, mi.field2,
             mi.encoded_field6, mi.encoded_city, mi.encoded_field8, mi.encoded_referee,
         ))
 
@@ -311,16 +353,17 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
                 (file_header_id,team_index,number,player_id,
                  starting_position_s1,starting_position_s2,starting_position_s3,
                  short_name,last_name,first_name,role,foreign_player,
-                 field6,field7,field11,field12,field15,field16,field17,
-                 encoded_last,encoded_first,field20,field21,field22,field23)
+                 field6,field7,field11,special_role,field15,field16,
+                 encoded_short,encoded_last,encoded_first,
+                 field20,field21,field22,field23)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 fhid, p.team_index, p.number, p.player_id,
                 p.starting_position_s1, p.starting_position_s2, p.starting_position_s3,
                 p.short_name, p.last_name, p.first_name, p.role,
                 int(p.foreign) if p.foreign is not None else None,
-                p.field6, p.field7, p.field11, p.field12,
-                p.field15, p.field16, p.field17,
-                p.encoded_last, p.encoded_first,
+                p.field6, p.field7, p.field11, p.special_role,
+                p.field15, p.field16,
+                p.encoded_short, p.encoded_last, p.encoded_first,
                 p.field20, p.field21, p.field22, p.field23,
             ))
 
@@ -361,18 +404,30 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
                  team,player_number,skill,skill_type,evaluation,
                  attack_code,setter_code,start_zone,end_zone,end_subzone,
                  special,custom1,custom2,video_time,
-                 set_number,home_score,visiting_score,serving_team,video_frame,
-                 rotation_home,rotation_visiting,
+                 set_number,home_rotation_pos,visiting_rotation_pos,
+                 serving_team,video_frame,
+                 rotation_home_1,rotation_home_2,rotation_home_3,
+                 rotation_home_4,rotation_home_5,rotation_home_6,
+                 rotation_visiting_1,rotation_visiting_2,rotation_visiting_3,
+                 rotation_visiting_4,rotation_visiting_5,rotation_visiting_6,
+                 point_visiting_score,point_home_score,
+                 rotation_new_pos,sub_out_jersey,sub_in_jersey,lineup_server_jersey,
                  is_set_start,is_rotation,is_point,is_substitution,
                  is_timeout,is_point_consequence,is_lineup)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 fhid, i, ev.raw,
                 ev.team, ev.player_number, ev.skill, ev.skill_type, ev.evaluation,
                 ev.attack_code, ev.setter_code, ev.start_zone, ev.end_zone,
                 ev.end_subzone, ev.special, ev.custom1, ev.custom2, ev.video_time,
-                ev.set_number, ev.home_score, ev.visiting_score,
+                ev.set_number, ev.home_rotation_pos, ev.visiting_rotation_pos,
                 ev.serving_team, ev.video_frame,
-                ev.rotation_home, ev.rotation_visiting,
+                ev.rotation_home_1, ev.rotation_home_2, ev.rotation_home_3,
+                ev.rotation_home_4, ev.rotation_home_5, ev.rotation_home_6,
+                ev.rotation_visiting_1, ev.rotation_visiting_2, ev.rotation_visiting_3,
+                ev.rotation_visiting_4, ev.rotation_visiting_5, ev.rotation_visiting_6,
+                ev.point_visiting_score, ev.point_home_score,
+                ev.rotation_new_pos, ev.sub_out_jersey, ev.sub_in_jersey,
+                ev.lineup_server_jersey,
                 int(ev.is_set_start), int(ev.is_rotation), int(ev.is_point),
                 int(ev.is_substitution), int(ev.is_timeout),
                 int(ev.is_point_consequence), int(ev.is_lineup),
@@ -428,24 +483,28 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             date=row["date"], time=row["time"], season=row["season"],
             league=row["league"], phase=row["phase"],
             match_number=row["match_number"], codepage=row["codepage"],
-            venue_code=row["venue_code"], home_away=row["home_away"],
-            scout_code=row["scout_code"],
+            home_indicator=row["home_indicator"],
+            federation_match_id=row["federation_match_id"],
+            field9=row["field9"], category_code=row["category_code"], field11=row["field11"],
             encoded_league=row["encoded_league"], encoded_phase=row["encoded_phase"],
-            field5=row["field5"], field7=row["field7"],
-            field9=row["field9"], field10=row["field10"], field11=row["field11"],
             field_l2_0=row["field_l2_0"], field_l2_1=row["field_l2_1"],
+            competition_code=row["competition_code"],
             field_l2_3=row["field_l2_3"], field_l2_4=row["field_l2_4"],
-            field_l2_5=row["field_l2_5"], field_l2_7=row["field_l2_7"],
+            field_l2_5=row["field_l2_5"],
+            home_away=row["home_away"],
+            opponent_home_away=row["opponent_home_away"],
             field_l2_8=row["field_l2_8"],
+            scout_license_id=row["scout_license_id"],
         )
 
     row = con.execute("SELECT * FROM more_info WHERE file_header_id=?", (fhid,)).fetchone()
     if row:
         dvw.more = MoreInfo(
-            city=row["city"], referee=row["referee"],
+            city=row["city"], venue=row["venue"], referee=row["referee"],
+            internal_ids=row["internal_ids"],
             duration1=row["duration1"], duration2=row["duration2"],
             field0=row["field0"], field1=row["field1"], field2=row["field2"],
-            field4=row["field4"], encoded_field6=row["encoded_field6"],
+            encoded_field6=row["encoded_field6"],
             encoded_city=row["encoded_city"], encoded_field8=row["encoded_field8"],
             encoded_referee=row["encoded_referee"],
         )
@@ -486,8 +545,9 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             first_name=row["first_name"], role=row["role"],
             foreign=bool(row["foreign_player"]) if row["foreign_player"] is not None else None,
             field6=row["field6"], field7=row["field7"],
-            field11=row["field11"], field12=row["field12"],
-            field15=row["field15"], field16=row["field16"], field17=row["field17"],
+            field11=row["field11"], special_role=row["special_role"],
+            field15=row["field15"], field16=row["field16"],
+            encoded_short=row["encoded_short"],
             encoded_last=row["encoded_last"], encoded_first=row["encoded_first"],
             field20=row["field20"], field21=row["field21"],
             field22=row["field22"], field23=row["field23"],
@@ -529,9 +589,23 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             end_zone=row["end_zone"], end_subzone=row["end_subzone"],
             special=row["special"], custom1=row["custom1"], custom2=row["custom2"],
             video_time=row["video_time"], set_number=row["set_number"],
-            home_score=row["home_score"], visiting_score=row["visiting_score"],
+            home_rotation_pos=row["home_rotation_pos"],
+            visiting_rotation_pos=row["visiting_rotation_pos"],
             serving_team=row["serving_team"], video_frame=row["video_frame"],
-            rotation_home=row["rotation_home"], rotation_visiting=row["rotation_visiting"],
+            rotation_home_1=row["rotation_home_1"], rotation_home_2=row["rotation_home_2"],
+            rotation_home_3=row["rotation_home_3"], rotation_home_4=row["rotation_home_4"],
+            rotation_home_5=row["rotation_home_5"], rotation_home_6=row["rotation_home_6"],
+            rotation_visiting_1=row["rotation_visiting_1"],
+            rotation_visiting_2=row["rotation_visiting_2"],
+            rotation_visiting_3=row["rotation_visiting_3"],
+            rotation_visiting_4=row["rotation_visiting_4"],
+            rotation_visiting_5=row["rotation_visiting_5"],
+            rotation_visiting_6=row["rotation_visiting_6"],
+            point_visiting_score=row["point_visiting_score"],
+            point_home_score=row["point_home_score"],
+            rotation_new_pos=row["rotation_new_pos"],
+            sub_out_jersey=row["sub_out_jersey"], sub_in_jersey=row["sub_in_jersey"],
+            lineup_server_jersey=row["lineup_server_jersey"],
             is_set_start=bool(row["is_set_start"]),
             is_rotation=bool(row["is_rotation"]),
             is_point=bool(row["is_point"]),
@@ -557,10 +631,10 @@ def _player_line(p: Player) -> str:
         _v(p.starting_position_s1), _v(p.starting_position_s2),
         _v(p.starting_position_s3), _v(p.field6), _v(p.field7),
         _v(p.short_name), _v(p.last_name), _v(p.first_name),
-        _v(p.field11), _v(p.field12), _v(p.role),
+        _v(p.field11), _v(p.special_role), _v(p.role),
         "False" if not p.foreign else "True",
-        _v(p.field15), _v(p.field16), _v(p.field17),
-        _v(p.encoded_last), _v(p.encoded_first),
+        _v(p.field15), _v(p.field16),
+        _v(p.encoded_short), _v(p.encoded_last), _v(p.encoded_first),
         _v(p.field20), _v(p.field21), _v(p.field22), _v(p.field23),
     ])
 
@@ -589,13 +663,13 @@ def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
     m = dvw.match
     L("[3MATCH]")
     L(";".join([_v(m.date),_v(m.time),_v(m.season),_v(m.league),_v(m.phase),
-                _v(m.field5),_v(m.match_number),_v(m.field7),_v(m.codepage),
-                _v(m.field9),_v(m.field10),_v(m.field11),
+                _v(m.home_indicator),_v(m.match_number),_v(m.federation_match_id),
+                _v(m.codepage),_v(m.field9),_v(m.category_code),_v(m.field11),
                 _v(m.encoded_league),_v(m.encoded_phase),"",]))
-    L(";".join([_v(m.field_l2_0),_v(m.field_l2_1),_v(m.venue_code),
+    L(";".join([_v(m.field_l2_0),_v(m.field_l2_1),_v(m.competition_code),
                 _v(m.field_l2_3),_v(m.field_l2_4),_v(m.field_l2_5),
-                _v(m.home_away),_v(m.field_l2_7),_v(m.field_l2_8),
-                _v(m.scout_code),"",]))
+                _v(m.home_away),_v(m.opponent_home_away),_v(m.field_l2_8),
+                _v(m.scout_license_id),"",]))
 
     L("[3TEAMS]")
     for t in dvw.teams:
@@ -606,9 +680,9 @@ def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
     mi = dvw.more
     L("[3MORE]")
     L(";".join([_v(mi.field0),_v(mi.field1),_v(mi.field2),_v(mi.city),
-                _v(mi.field4),_v(mi.referee),_v(mi.encoded_field6),
+                _v(mi.venue),_v(mi.referee),_v(mi.encoded_field6),
                 _v(mi.encoded_city),_v(mi.encoded_field8),_v(mi.encoded_referee),]))
-    L(f";{_v(mi.duration1)};{_v(mi.duration2)};")
+    L(f"{_v(mi.internal_ids)};{_v(mi.duration1)};{_v(mi.duration2)};")
 
     L("[3COMMENTS]")
     L(dvw.comments or "no comments")

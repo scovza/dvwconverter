@@ -1,4 +1,4 @@
-"""CLI entry point; run via `python -m dvwconverter` or `dvwconverter`."""
+"""CLI entry point; run via `python -m dvwconverter__main__` or `dvwconverter__main__`."""
 
 import argparse
 import shutil
@@ -198,7 +198,7 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="dvwconverter",
+        prog="dvwconverter__main__",
         description="Convert DataVolley .dvw scouting files to/from SQLite.",
     )
     sub = p.add_subparsers(dest="command", required=True)
