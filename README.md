@@ -1,4 +1,4 @@
-# dvwconverter
+# dvwconverter - PRE-RELEASE
 
 A minimal, dependency-free Python tool that converts DataVolley `.dvw` scouting files to SQLite and back.
 
