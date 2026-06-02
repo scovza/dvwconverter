@@ -230,7 +230,7 @@ All tables carry a `file_header_id` FK. Key tables:
 
 ## Release Notes
 
-### v0.4.0 — 2026-06-02
+### v0.4.0 — 2026-06-03
 
 - `Player.field6`/`field7` renamed to `starting_position_s4`/`starting_position_s5`.
 - `AttackCombination.field9` renamed to `is_back_row_attack: bool`.
