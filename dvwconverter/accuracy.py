@@ -18,7 +18,7 @@ class AccuracyReport:
     has_teams: bool
     has_players: bool
     has_sets: bool
-    has_score_context: bool         # fraction of skill events with score context
+    has_score_context: float        # fraction of point events with decoded score
     details: dict[str, float]       # per-component weights and values
 
     def __str__(self) -> str:
@@ -34,8 +34,7 @@ class AccuracyReport:
 
 
 def compute_accuracy(dvw: DvwFile) -> AccuracyReport:
-    """
-    Compute the Accuracy Index for a converted DvwFile.
+    """Compute the Accuracy Index for a converted DvwFile.
 
     Formula
     -------
@@ -44,7 +43,8 @@ def compute_accuracy(dvw: DvwFile) -> AccuracyReport:
     Where:
       C_skill   = fraction of skill events with (team + player + skill) parsed
       C_header  = (has_teams + has_players + has_sets) / 3
-      C_score   = fraction of skill events that carry point_home_score/point_visiting_score
+      C_score   = fraction of point events with a decoded score
+                  (0.5 neutral if no point events present — some exports omit them)
       C_volume  = min(total_events / MIN_EVENTS, 1.0)  — penalises near-empty files
 
     Weights: w1=0.50  w2=0.20  w3=0.20  w4=0.10
@@ -61,16 +61,15 @@ def compute_accuracy(dvw: DvwFile) -> AccuracyReport:
     - The index measures parsing completeness, not semantic correctness.
     - Files with only a few events score lower even if perfectly parsed.
     - Undecoded fields (fieldN) are ignored; they do not affect the score.
-    - Score context requires DataVolley to embed it; some exports omit it.
     """
     events: list[ScoutEvent] = dvw.scout_events
     total = len(events)
 
     skill_events = [
         e for e in events
-        if not any([e.is_set_start, e.is_rotation, e.is_point,
+        if not any((e.is_set_start, e.is_rotation, e.is_point,
                     e.is_substitution, e.is_timeout,
-                    e.is_point_consequence, e.is_lineup])
+                    e.is_point_consequence, e.is_lineup))
         and e.team is not None
     ]
     n_skill = len(skill_events)
@@ -86,20 +85,23 @@ def compute_accuracy(dvw: DvwFile) -> AccuracyReport:
         c_skill = 0.0
 
     # C_header: structural completeness
-    has_teams = len(dvw.teams) >= 2
+    has_teams   = len(dvw.teams) >= 2
     has_players = len(dvw.players) >= 2
-    has_sets = any(s.played for s in dvw.sets)
-    c_header = (has_teams + has_players + has_sets) / 3
+    has_sets    = any(s.played for s in dvw.sets)
+    c_header    = (has_teams + has_players + has_sets) / 3
 
-    # C_score: fraction of skill events with embedded score context
-    if n_skill:
+    # C_score: fraction of point events with a successfully decoded running score.
+    # Skill events never carry score data.
+    point_events = [e for e in events if e.is_point]
+    if point_events:
         with_score = sum(
-            1 for e in skill_events
+            1 for e in point_events
             if e.point_home_score is not None and e.point_visiting_score is not None
         )
-        c_score = with_score / n_skill
+        c_score = with_score / len(point_events)
     else:
-        c_score = 0.0
+        # No point events — treat as neutral; some older DV exports omit them entirely.
+        c_score = 0.5
 
     # C_volume: penalise near-empty files
     c_volume = min(total / _MIN_EVENTS, 1.0)
@@ -117,13 +119,13 @@ def compute_accuracy(dvw: DvwFile) -> AccuracyReport:
         has_sets=has_sets,
         has_score_context=round(c_score, 4),
         details={
-            "c_skill": round(c_skill, 4),
-            "c_header": round(c_header, 4),
-            "c_score": round(c_score, 4),
-            "c_volume": round(c_volume, 4),
-            "w_skill": 0.50,
-            "w_header": 0.20,
-            "w_score": 0.20,
-            "w_volume": 0.10,
+            "c_skill":   round(c_skill, 4),
+            "c_header":  round(c_header, 4),
+            "c_score":   round(c_score, 4),
+            "c_volume":  round(c_volume, 4),
+            "w_skill":   0.50,
+            "w_header":  0.20,
+            "w_score":   0.20,
+            "w_volume":  0.10,
         },
     )

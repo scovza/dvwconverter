@@ -38,7 +38,6 @@ Score interpretation
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -201,28 +200,17 @@ def _multiset_match(a: list[str], b: list[str]) -> int:
     return sum((ca & cb).values())
 
 
-# ── core function ─────────────────────────────────────────────────────────────
-
-def roundtrip_accuracy(
-    original_path: str,
-    db_path: str,
-    fhid: int,
-    recon_dir: str,
+def _compute_report(
+    orig_path: str,
+    recon_path: str,
 ) -> RoundTripReport:
     """
-    Reconstruct the .dvw for *fhid* from *db_path* into *recon_dir*, then
-    diff it against *original_path*.  Returns a RoundTripReport.
+    Diff *orig_path* against *recon_path* and return a RoundTripReport.
 
-    This is the single entry point used by both dvw2db and db2dvw.
+    This is the single place where all diff maths live; both
+    roundtrip_accuracy and roundtrip_from_recon delegate here.
     """
-    # Reconstruct → recon_dir
-    written = db_to_dvw(db_path, recon_dir, file_header_id=fhid)
-    if not written:
-        raise RuntimeError(f"db_to_dvw produced no output for fhid={fhid}")
-    recon_path = written[0]
-
-    # Read both files
-    orig_lines  = _read_lines(original_path)
+    orig_lines  = _read_lines(orig_path)
     recon_lines = _read_lines(recon_path)
 
     orig_secs  = _split_sections(orig_lines)
@@ -234,132 +222,34 @@ def roundtrip_accuracy(
     section_coverage = len(secs_present) / len(_EXPECTED_SECTIONS)
 
     # Per-section diff
-    all_secs = set(orig_secs) | set(recon_secs)
-    section_diffs: dict[str, SectionDiff] = {}
-    for sec in all_secs:
-        o = orig_secs.get(sec, [])
-        r = recon_secs.get(sec, [])
-        section_diffs[sec] = SectionDiff(
+    section_diffs: dict[str, SectionDiff] = {
+        sec: SectionDiff(
             name=sec,
-            original_lines=len(o),
-            reconstructed_lines=len(r),
-            matching_lines=_multiset_match(o, r),
+            original_lines=len(orig_secs.get(sec, [])),
+            reconstructed_lines=len(recon_secs.get(sec, [])),
+            matching_lines=_multiset_match(orig_secs.get(sec, []), recon_secs.get(sec, [])),
         )
+        for sec in set(orig_secs) | set(recon_secs)
+    }
 
     # Overall line match
-    total_match = _multiset_match(orig_lines, recon_lines)
+    total_match      = _multiset_match(orig_lines, recon_lines)
     line_match_ratio = total_match / len(orig_lines) if orig_lines else 1.0
 
     # Scout-event match
-    scout_orig  = orig_secs.get("[3SCOUT]", [])
-    scout_recon = recon_secs.get("[3SCOUT]", [])
-    scout_match = _multiset_match(scout_orig, scout_recon)
+    scout_orig        = orig_secs.get("[3SCOUT]", [])
+    scout_recon       = recon_secs.get("[3SCOUT]", [])
+    scout_match       = _multiset_match(scout_orig, scout_recon)
     scout_match_ratio = scout_match / len(scout_orig) if scout_orig else 1.0
 
     # Data loss
     c_orig  = Counter(orig_lines)
     c_recon = Counter(recon_lines)
-    lost = sum((c_orig - c_recon).values())
+    lost         = sum((c_orig - c_recon).values())
     data_loss_pct = (lost / len(orig_lines) * 100) if orig_lines else 0.0
 
     # Changed-line detail (positional, for --verbose)
     changed: list[tuple[int, str, str]] = [
-        (i + 1, o, r)
-        for i, (o, r) in enumerate(zip(orig_lines, recon_lines))
-        if o != r
-    ]
-
-    # Score
-    roundtrip_score = 100.0 * (
-        0.55 * line_match_ratio
-        + 0.25 * section_coverage
-        + 0.20 * scout_match_ratio
-    )
-
-    return RoundTripReport(
-        source_path=original_path,
-        reconstructed_path=recon_path,
-        roundtrip_score=round(roundtrip_score, 2),
-        data_loss_pct=round(data_loss_pct, 2),
-        total_original_lines=len(orig_lines),
-        total_reconstructed_lines=len(recon_lines),
-        identical_lines=total_match,
-        line_match_ratio=round(line_match_ratio, 4),
-        sections_present=secs_present,
-        sections_missing=secs_missing,
-        section_coverage=round(section_coverage, 4),
-        section_diffs=section_diffs,
-        scout_events_original=len(scout_orig),
-        scout_events_reconstructed=len(scout_recon),
-        scout_events_matching=scout_match,
-        scout_match_ratio=round(scout_match_ratio, 4),
-        changed_lines=changed,
-    )
-
-
-def roundtrip_from_recon(
-    recon_path: str,
-    db_path: str,
-    fhid: int,
-) -> "RoundTripReport | None":
-    """
-    Used after db2dvw: look up the original source_path in the DB and diff
-    against it.  Returns None if the original file is no longer accessible.
-    """
-    try:
-        con = sqlite3.connect(db_path)
-        row = con.execute(
-            "SELECT source_path FROM file_header WHERE id=?", (fhid,)
-        ).fetchone()
-        con.close()
-    except Exception:
-        return None
-
-    if not row or not row[0]:
-        return None
-
-    orig_path = row[0]
-    if not Path(orig_path).exists():
-        return None
-
-    # Diff the already-written recon file against the original —
-    # no need to call db_to_dvw again.
-    orig_lines  = _read_lines(orig_path)
-    recon_lines = _read_lines(recon_path)
-
-    orig_secs  = _split_sections(orig_lines)
-    recon_secs = _split_sections(recon_lines)
-
-    secs_present = _EXPECTED_SECTIONS & set(recon_secs)
-    secs_missing = _EXPECTED_SECTIONS - secs_present
-    section_coverage = len(secs_present) / len(_EXPECTED_SECTIONS)
-
-    all_secs = set(orig_secs) | set(recon_secs)
-    section_diffs: dict[str, SectionDiff] = {}
-    for sec in all_secs:
-        o = orig_secs.get(sec, [])
-        r = recon_secs.get(sec, [])
-        section_diffs[sec] = SectionDiff(
-            name=sec,
-            original_lines=len(o),
-            reconstructed_lines=len(r),
-            matching_lines=_multiset_match(o, r),
-        )
-
-    total_match = _multiset_match(orig_lines, recon_lines)
-    line_match_ratio = total_match / len(orig_lines) if orig_lines else 1.0
-
-    scout_orig  = orig_secs.get("[3SCOUT]", [])
-    scout_recon = recon_secs.get("[3SCOUT]", [])
-    scout_match = _multiset_match(scout_orig, scout_recon)
-    scout_match_ratio = scout_match / len(scout_orig) if scout_orig else 1.0
-
-    c_orig  = Counter(orig_lines)
-    c_recon = Counter(recon_lines)
-    lost = sum((c_orig - c_recon).values())
-    data_loss_pct = (lost / len(orig_lines) * 100) if orig_lines else 0.0
-
-    changed = [
         (i + 1, o, r)
         for i, (o, r) in enumerate(zip(orig_lines, recon_lines))
         if o != r
@@ -390,3 +280,77 @@ def roundtrip_from_recon(
         scout_match_ratio=round(scout_match_ratio, 4),
         changed_lines=changed,
     )
+
+
+# ── public API ────────────────────────────────────────────────────────────────
+
+def roundtrip_accuracy(
+    original_path: str,
+    db_path: str,
+    fhid: int,
+    recon_dir: str,
+) -> RoundTripReport:
+    """Reconstruct the .dvw for *fhid* from *db_path* into *recon_dir*, diff
+    against *original_path*, and return a RoundTripReport.
+
+    The reconstructed file is written as ``rt_<stem>.dvw`` directly inside
+    *recon_dir* (no sub-directory).  This is the entry point used by dvw2db.
+    """
+    # Pre-clean any leftover temp subdir from a previous run.
+    # db_to_dvw creates <recon_dir>/<stem>.dvw/<stem>.dvw; on Windows,
+    # mkdir raises [WinError 183] if <stem>.dvw already exists as a file,
+    # and the intermediate directory may survive if a prior run failed mid-way.
+    orig_stem = Path(original_path).stem
+    temp_subdir = Path(recon_dir) / f"{orig_stem}.dvw"
+    if temp_subdir.is_file():
+        temp_subdir.unlink()
+    elif temp_subdir.is_dir():
+        import shutil as _shutil
+        _shutil.rmtree(temp_subdir)
+
+    written = db_to_dvw(db_path, recon_dir, file_header_id=fhid)
+    if not written:
+        raise RuntimeError(f"db_to_dvw produced no output for fhid={fhid}")
+
+    # db_to_dvw writes into <recon_dir>/<stem>.dvw/<stem>.dvw; extract the
+    # file, rename it to rt_<stem>.dvw directly under recon_dir, then remove
+    # the now-empty sub-directory.
+    src = Path(written[0])
+    rt_path = src.parent.parent / f"rt_{src.stem}.dvw"
+    if rt_path.exists():
+        rt_path.unlink()
+    src.rename(rt_path)
+    try:
+        src.parent.rmdir()
+    except OSError:
+        pass  # not empty — leave it
+
+    return _compute_report(original_path, str(rt_path))
+
+
+def roundtrip_from_recon(
+    recon_path: str,
+    db_path: str,
+    fhid: int,
+) -> RoundTripReport | None:
+    """
+    Used after db2dvw: look up the original source_path in the DB and diff
+    against it.  Returns None if the original file is no longer accessible.
+    """
+    try:
+        con = sqlite3.connect(db_path)
+        row = con.execute(
+            "SELECT source_path FROM file_header WHERE id=?", (fhid,)
+        ).fetchone()
+        con.close()
+    except Exception:
+        return None
+
+    if not row or not row[0]:
+        return None
+
+    orig_path = row[0]
+    if not Path(orig_path).exists():
+        return None
+
+    return _compute_report(orig_path, recon_path)

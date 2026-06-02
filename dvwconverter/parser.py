@@ -109,6 +109,9 @@ class MatchInfo:
     field_l2_8: Optional[str] = None
     # line2[9]: numeric DataVolley license/operator ID for the scout who created the file
     scout_license_id: Optional[int] = None
+    # Raw source lines — used verbatim on write-back to preserve exact field count
+    _raw_line1: Optional[str] = None
+    _raw_line2: Optional[str] = None
 
 
 @dataclass
@@ -162,6 +165,7 @@ class SetScore:
     score_21: Optional[str] = None
     final_score: Optional[str] = None
     duration: Optional[int] = None
+    _raw: Optional[str] = None  # original source line for verbatim write-back
 
 
 @dataclass
@@ -188,8 +192,10 @@ class Player:
     starting_position_s1: Optional[str] = None
     starting_position_s2: Optional[str] = None
     starting_position_s3: Optional[str] = None
-    field6: Optional[str] = None
-    field7: Optional[str] = None
+    # Confirmed: starting rotation position for set 4 (empty for 3-set matches)
+    starting_position_s4: Optional[str] = None
+    # Confirmed: starting rotation position for set 5 (empty for matches < 5 sets)
+    starting_position_s5: Optional[str] = None
     short_name: Optional[str] = None
     last_name: Optional[str] = None
     first_name: Optional[str] = None
@@ -208,6 +214,7 @@ class Player:
     field21: Optional[str] = None
     field22: Optional[str] = None
     field23: Optional[str] = None
+    _raw: Optional[str] = None  # original source line for verbatim write-back
 
 
 @dataclass
@@ -224,9 +231,10 @@ class AttackCombination:
     # XX=lateral (12=zone4/5 left … 50=center … 88=zone1/2 right)
     position: Optional[int] = None
     attacker_position: Optional[str] = None  # F=front-row, B=back-row, C S P -
-    # field9: suspected back-row flag ("1"=back-row); unconfirmed
-    field9: Optional[str] = None
+    # Confirmed: True when this is a back-row attack (tempo 7/8/9, position P/F/B)
+    is_back_row_attack: Optional[bool] = None
     field10: Optional[str] = None
+    _raw: Optional[str] = None  # original source line for verbatim write-back
 
 
 @dataclass
@@ -238,11 +246,12 @@ class SetterCall:
     field3: Optional[str] = None
     color: Optional[int] = None
     # coordinate fields share the same YYXX encoding as AttackCombination.position
-    x1: Optional[int] = None           # setter's position on canvas
-    y1: Optional[int] = None           # apex/midpoint of the set-arc ball trajectory
-    x2: Optional[int] = None           # attack target position
+    x1: Optional[str] = None           # setter's position on canvas (raw string, e.g. '0000')
+    y1: Optional[str] = None           # apex/midpoint of the set-arc ball trajectory
+    x2: Optional[str] = None           # attack target position
     area_list: Optional[str] = None    # comma-separated area codes
     highlight_color: Optional[int] = None
+    _raw: Optional[str] = None  # original source line for verbatim write-back
 
 
 @dataclass
@@ -258,13 +267,13 @@ class ScoutEvent:
     Single play-by-play event from [3SCOUT].
 
     Regular skill line format:
-        [*|a]<nn><skill>[type][eval][attack|setter][~zone~target][specials]
-        ;[custom1];[custom2];;;;;;[video_time];[set];[home_rot_pos];[visiting_rot_pos];[serving];[frame];;[rot_h1..6];[rot_v1..6];
+        [*|a]<nn><skill>[type][eval][attack|setter][~zone~target[subzone]]
+        ;[point_phase];[attack_cone];;;;;;[video_time];[set];[home_rot_pos];[visiting_rot_pos];[serving];[frame];;[rot_h1..6];[rot_v1..6];
 
     Prefix: * = visiting team, a = home team.
     Special prefixes: **Nset=set boundary, *z/az=rotation, *p/ap=point,
-                      ac/*c=substitution, aT/*T=timeout, $$&=rally outcome,
-                      *P/aP=lineup declaration.
+                      ac/*c=substitution, aT/*T=timeout,
+                      $$&/$$D/$$F=rally outcome, *P/aP=lineup declaration.
 
     IMPORTANT – tail fields 9 and 10 (home_rotation_pos / visiting_rotation_pos):
         These store the current *rotation position* (1–6) of each team,
@@ -283,7 +292,9 @@ class ScoutEvent:
                            (*=visiting scored, a=home scored)
         *c12:17 / ac…    — substitution: jersey 12 out, jersey 17 in
         *P18>LUp / aP…   — lineup declaration at set start (jersey=server)
-        a$$&H# / *$$&H=  — rally outcome: H=hard attack, #=kill, ==opponent error
+        a$$&H# / *$$&H=  — rally outcome (hard attack): H=hard, #=kill, ==opponent error
+        a$$DH# / *$$DH!  — rally outcome (block/dig consequence)
+        a$$FH#           — rally outcome (freeball consequence)
     """
     raw: str = ""
 
@@ -296,10 +307,12 @@ class ScoutEvent:
     setter_code: Optional[str] = None
     start_zone: Optional[str] = None
     end_zone: Optional[str] = None
+    # 2–3 char directional suffix after end zone: RC, RS, LC, SC, SS, NRC, NRS, IRS, …
     end_subzone: Optional[str] = None
-    special: Optional[str] = None
-    custom1: Optional[str] = None
-    custom2: Optional[str] = None
+    # Confirmed: "p"=action won the point (kill/ace/block/error), "s"=in-rally action, empty=non-skill line
+    point_phase: Optional[str] = None
+    # Confirmed: attack direction cone, Attack events only — "r"=cross/right, "s"=straight/line, "p"=pipe/back-center
+    attack_cone: Optional[str] = None
     video_time: Optional[str] = None
     set_number: Optional[int] = None
     # tail[9]: home team current rotation position (1–6), NOT match score
@@ -384,6 +397,8 @@ def _parse_header(lines: list[str]) -> FileHeader:
 
 def _parse_match(lines: list[str]) -> MatchInfo:
     m = MatchInfo()
+    m._raw_line1 = lines[0].rstrip('\r\n') if lines else None
+    m._raw_line2 = lines[1].rstrip('\r\n') if len(lines) >= 2 else None
     if lines:
         p = _split(lines[0])
         fields_l1 = [
@@ -471,6 +486,7 @@ def _parse_sets(lines: list[str]) -> list[SetScore]:
             score_21=_str(p[3]) if len(p) > 3 else None,
             final_score=_str(p[4]) if len(p) > 4 else None,
             duration=_int(p[5]) if len(p) > 5 else None,
+            _raw=line.rstrip('\r\n'),
         ))
     return result
 
@@ -499,7 +515,7 @@ def _parse_player(line: str, team_index: int) -> Player:
         team_index=team_index,
         number=g(1, _int), player_id=g(2, _int) or 0,
         starting_position_s1=g(3), starting_position_s2=g(4),
-        starting_position_s3=g(5), field6=g(6), field7=g(7),
+        starting_position_s3=g(5), starting_position_s4=g(6), starting_position_s5=g(7),
         short_name=g(8), last_name=g(9), first_name=g(10),
         field11=g(11),
         # field[12]: "L"=Libero, "C"=Captain, ""=standard player
@@ -514,6 +530,7 @@ def _parse_player(line: str, team_index: int) -> Player:
         # field[19]: encoded first_name (\x0f2+hex)
         encoded_first=g(19),
         field20=g(20), field21=g(21), field22=g(22), field23=g(23),
+        _raw=line.rstrip('\r\n'),
     )
 
 
@@ -524,7 +541,9 @@ def _parse_attack_combination(line: str) -> AttackCombination:
         code=g(0), tempo=g(1, _int), side=g(2), height=g(3),
         description=g(4), field5=g(5), color=g(6, _int),
         position=g(7, _int), attacker_position=g(8),
-        field9=g(9), field10=g(10),
+        is_back_row_attack=(g(9) == "1") if g(9) is not None else None,
+        field10=g(10),
+        _raw=line.rstrip('\r\n'),
     )
 
 
@@ -533,8 +552,9 @@ def _parse_setter_call(line: str) -> SetterCall:
     g = lambda i, conv=_str: conv(p[i]) if len(p) > i else None
     return SetterCall(
         code=g(0), field1=g(1), description=g(2), field3=g(3),
-        color=g(4, _int), x1=g(5, _int), y1=g(6, _int), x2=g(7, _int),
+        color=g(4, _int), x1=g(5), y1=g(6), x2=g(7),  # preserve '0000' etc. as strings
         area_list=g(8), highlight_color=g(9, _int),
+        _raw=line.rstrip('\r\n'),
     )
 
 
@@ -569,8 +589,8 @@ def _parse_scout_event(line: str) -> ScoutEvent:  # noqa: C901
 
     parts = raw.split(";")
     if len(parts) >= 16:
-        ev.custom1 = _str(parts[1])
-        ev.custom2 = _str(parts[2])
+        ev.point_phase = _str(parts[1])
+        ev.attack_cone = _str(parts[2])
         ev.video_time = _str(parts[7])
         ev.set_number = _int(parts[8])
         # tail[9] = home rotation position (1–6), NOT the score
@@ -644,15 +664,16 @@ def _parse_scout_event(line: str) -> ScoutEvent:  # noqa: C901
         ev.team = "V" if body[0] == "*" else "H"
         return ev
 
-    # rally outcome: a$$&H# or *$$&H=
-    # team prefix + $$& + skill(H=Hard) + eval(#=kill, ==opponent error)
-    if "$$&" in body:
+    # rally outcome: a$$&H# / *$$&H= (hard attack), a$$DH# (block/dig consequence), a$$FH# (freeball consequence)
+    # Second char: & = hard attack end, D = block/dig, F = freeball exchange
+    # Third char: H = Hard attack skill; fourth char: #=kill, ==error, !=excellent, /=slash
+    if "$$" in body and len(body) >= 5 and body[body.index("$$") + 2] in "&DF":
         ev.is_point_consequence = True
         ev.team = "V" if body.startswith("*") else "H"
-        m = re.match(r"[a*]\$\$&([A-Z])([#=])", body)
+        m = re.match(r"[a*]\$\$([&DF])([A-Z])([#=!/]?)", body)
         if m:
-            ev.skill = m.group(1)       # H = Hard attack
-            ev.evaluation = m.group(2)  # # = kill/point, = = opponent error
+            ev.skill = m.group(2)       # H = Hard attack skill type
+            ev.evaluation = m.group(3)  # # = kill/point, = = opponent error
         return ev
 
     # lineup declaration: *P18>LUp or aP18>LUp (set start or mid-set change)
@@ -693,15 +714,16 @@ def _parse_scout_event(line: str) -> ScoutEvent:  # noqa: C901
         ev.setter_code = sc_m.group(1)
         tail = tail[len(sc_m.group(1)):]
 
-    # attack combo + zones e.g. V5~45~H2  or ~~F  or ~~B
-    ac_m = re.match(r"([A-Z~]{2})~(\d{2})~([A-Z]\d)([A-Z]?)", tail)
+    # attack combo + zones e.g. V5~45~H2RC  or ~~F  or ~~B
+    # end_subzone is 0–3 chars: RC, RS, LC, SC, SS, NRC, NRS, IRS, etc.
+    ac_m = re.match(r"([A-Z~]{2})~(\d{2})~([A-Z]\d)([A-Z]{0,3})", tail)
     if ac_m:
         raw_ac = ac_m.group(1).replace("~", "")
         if raw_ac:
             ev.attack_code = raw_ac
         ev.start_zone = ac_m.group(2)
         ev.end_zone = ac_m.group(3)
-        ev.special = ac_m.group(4) or None
+        ev.end_subzone = ac_m.group(4) or None
 
     return ev
 

@@ -67,7 +67,9 @@ CREATE TABLE IF NOT EXISTS match (
     opponent_home_away TEXT,
     field_l2_8        TEXT,
     -- Numeric DataVolley software license / operator ID for the scout
-    scout_license_id  INTEGER
+    scout_license_id  INTEGER,
+    raw_line1         TEXT,  -- original source line 1 for verbatim write-back
+    raw_line2         TEXT   -- original source line 2 for verbatim write-back
 );
 
 CREATE TABLE IF NOT EXISTS more_info (
@@ -118,7 +120,8 @@ CREATE TABLE IF NOT EXISTS set_score (
     score_16          TEXT,
     score_21          TEXT,
     final_score       TEXT,
-    duration          INTEGER
+    duration          INTEGER,
+    raw_line          TEXT   -- original source line for verbatim write-back
 );
 
 CREATE TABLE IF NOT EXISTS player (
@@ -130,13 +133,15 @@ CREATE TABLE IF NOT EXISTS player (
     starting_position_s1 TEXT,
     starting_position_s2 TEXT,
     starting_position_s3 TEXT,
+    -- Confirmed: starting rotation position for set 4 (NULL for 3-set matches)
+    starting_position_s4 TEXT,
+    -- Confirmed: starting rotation position for set 5 (NULL for matches < 5 sets)
+    starting_position_s5 TEXT,
     short_name        TEXT,
     last_name         TEXT,
     first_name        TEXT,
     role              INTEGER,
     foreign_player    INTEGER,
-    field6            TEXT,
-    field7            TEXT,
     field11           TEXT,
     -- "L"=Libero, "C"=Captain, ""=standard player
     special_role      TEXT,
@@ -149,7 +154,8 @@ CREATE TABLE IF NOT EXISTS player (
     field20           TEXT,
     field21           TEXT,
     field22           TEXT,
-    field23           TEXT
+    field23           TEXT,
+    raw_line          TEXT   -- original source line for verbatim write-back
 );
 
 -- NOTE: All score fields in set_score are "visiting_score-home_score" (visiting first).
@@ -168,8 +174,10 @@ CREATE TABLE IF NOT EXISTS attack_combination (
     position          INTEGER,
     attacker_position TEXT,
     field5            TEXT,
-    field9            TEXT,
-    field10           TEXT
+    -- Confirmed: 1 when this is a back-row attack (tempo 7/8/9, attacker_position P/F/B)
+    is_back_row_attack INTEGER,
+    field10           TEXT,
+    raw_line          TEXT   -- original source line for verbatim write-back
 );
 
 CREATE TABLE IF NOT EXISTS setter_call (
@@ -178,13 +186,14 @@ CREATE TABLE IF NOT EXISTS setter_call (
     code              TEXT,
     description       TEXT,
     color             INTEGER,
-    x1                INTEGER,
-    y1                INTEGER,
-    x2                INTEGER,
+    x1                TEXT,
+    y1                TEXT,
+    x2                TEXT,
     area_list         TEXT,
     highlight_color   INTEGER,
     field1            TEXT,
-    field3            TEXT
+    field3            TEXT,
+    raw_line          TEXT   -- original source line for verbatim write-back
 );
 
 CREATE TABLE IF NOT EXISTS winning_symbols (
@@ -215,9 +224,10 @@ CREATE TABLE IF NOT EXISTS scout_event (
     start_zone        TEXT,
     end_zone          TEXT,
     end_subzone       TEXT,
-    special           TEXT,
-    custom1           TEXT,
-    custom2           TEXT,
+    -- Confirmed: "p"=action won the point, "s"=in-rally action, NULL=non-skill line
+    point_phase       TEXT,
+    -- Confirmed: attack direction cone (Attack events only): "r"=cross, "s"=line, "p"=pipe
+    attack_cone       TEXT,
     video_time        TEXT,
     set_number        INTEGER,
     -- IMPORTANT: these are rotation positions (1-6), NOT match scores
@@ -254,10 +264,93 @@ CREATE TABLE IF NOT EXISTS scout_event (
     is_point          INTEGER,
     is_substitution   INTEGER,
     is_timeout        INTEGER,
+    -- Rally outcome: $$& (hard attack), $$D (block/dig), $$F (freeball)
     is_point_consequence INTEGER,
     is_lineup         INTEGER
 );
 """
+
+
+# ── schema migration ──────────────────────────────────────────────────────────
+
+# Each entry is (table, column, column_definition).
+# Applied with ALTER TABLE ... ADD COLUMN when the column is absent.
+# This lets existing databases from older versions be imported into without
+# deleting and recreating the file -- just re-run dvw2db on the same .db.
+_MIGRATIONS: list[tuple[str, str, str]] = [
+    # current -> next (raw_line verbatim write-back)
+    ("match",              "raw_line1",           "TEXT"),
+    ("match",              "raw_line2",           "TEXT"),
+    ("set_score",          "raw_line",            "TEXT"),
+    ("player",             "raw_line",            "TEXT"),
+    ("attack_combination", "raw_line",            "TEXT"),
+    ("setter_call",        "raw_line",            "TEXT"),
+    # v0.3.0 -> v0.4.0
+    ("player",             "starting_position_s4", "TEXT"),
+    ("player",             "starting_position_s5", "TEXT"),
+    ("attack_combination", "is_back_row_attack",   "INTEGER"),
+    ("scout_event",        "point_phase",           "TEXT"),
+    ("scout_event",        "attack_cone",           "TEXT"),
+    # v0.2.x -> v0.3.0 (guard for very old databases)
+    ("match",              "home_indicator",        "TEXT"),
+    ("match",              "federation_match_id",   "INTEGER"),
+    ("match",              "category_code",         "TEXT"),
+    ("match",              "opponent_home_away",     "TEXT"),
+    ("match",              "scout_license_id",      "INTEGER"),
+    ("match",              "competition_code",      "TEXT"),
+    ("more_info",          "venue",                 "TEXT"),
+    ("more_info",          "internal_ids",          "TEXT"),
+    ("player",             "special_role",          "TEXT"),
+    ("player",             "encoded_short",         "TEXT"),
+    ("scout_event",        "end_subzone",           "TEXT"),
+    ("scout_event",        "home_rotation_pos",     "INTEGER"),
+    ("scout_event",        "visiting_rotation_pos", "INTEGER"),
+    ("scout_event",        "point_visiting_score",  "INTEGER"),
+    ("scout_event",        "point_home_score",      "INTEGER"),
+    ("scout_event",        "rotation_new_pos",      "INTEGER"),
+    ("scout_event",        "sub_out_jersey",        "INTEGER"),
+    ("scout_event",        "sub_in_jersey",         "INTEGER"),
+    ("scout_event",        "lineup_server_jersey",  "INTEGER"),
+    ("scout_event",        "rotation_home_1",       "INTEGER"),
+    ("scout_event",        "rotation_home_2",       "INTEGER"),
+    ("scout_event",        "rotation_home_3",       "INTEGER"),
+    ("scout_event",        "rotation_home_4",       "INTEGER"),
+    ("scout_event",        "rotation_home_5",       "INTEGER"),
+    ("scout_event",        "rotation_home_6",       "INTEGER"),
+    ("scout_event",        "rotation_visiting_1",   "INTEGER"),
+    ("scout_event",        "rotation_visiting_2",   "INTEGER"),
+    ("scout_event",        "rotation_visiting_3",   "INTEGER"),
+    ("scout_event",        "rotation_visiting_4",   "INTEGER"),
+    ("scout_event",        "rotation_visiting_5",   "INTEGER"),
+    ("scout_event",        "rotation_visiting_6",   "INTEGER"),
+    ("scout_event",        "is_substitution",       "INTEGER"),
+    ("scout_event",        "is_timeout",            "INTEGER"),
+    ("scout_event",        "is_point_consequence",  "INTEGER"),
+    ("scout_event",        "is_lineup",             "INTEGER"),
+]
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Add any missing columns to an existing database (idempotent).
+
+    SQLite does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS, so we
+    inspect PRAGMA table_info first and only issue ALTER statements for columns
+    that are genuinely absent. Safe to call on a freshly created database (all
+    columns will already be present) or on a database from any prior version.
+    """
+    existing: set[tuple[str, str]] = set()
+    existing_tables: set[str] = set()
+    for (table,) in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall():
+        existing_tables.add(table)
+        for row in con.execute(f"PRAGMA table_info({table})").fetchall():
+            existing.add((table, row[1]))  # row[1] = column name
+
+    for table, column, defn in _MIGRATIONS:
+        if table in existing_tables and (table, column) not in existing:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {defn}")
+    con.commit()
 
 
 # ── DVW → SQLite ──────────────────────────────────────────────────────────────
@@ -268,6 +361,7 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
     con = sqlite3.connect(db_path)
     try:
         con.executescript(SCHEMA)
+        _migrate(con)
         cur = con.cursor()
 
         cur.execute("""
@@ -297,8 +391,9 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
              encoded_league,encoded_phase,
              field_l2_0,field_l2_1,competition_code,
              field_l2_3,field_l2_4,field_l2_5,
-             home_away,opponent_home_away,field_l2_8,scout_license_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+             home_away,opponent_home_away,field_l2_8,scout_license_id,
+             raw_line1,raw_line2)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
             fhid, m.date, m.time, m.season, m.league, m.phase,
             m.match_number, m.codepage, m.home_indicator, m.federation_match_id,
             m.field9, m.category_code, m.field11,
@@ -306,6 +401,7 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
             m.field_l2_0, m.field_l2_1, m.competition_code,
             m.field_l2_3, m.field_l2_4, m.field_l2_5,
             m.home_away, m.opponent_home_away, m.field_l2_8, m.scout_license_id,
+            m._raw_line1, m._raw_line2,
         ))
 
         mi = dvw.more
@@ -340,11 +436,12 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
             cur.execute("""
                 INSERT INTO set_score
                 (file_header_id,set_number,played,score_8,score_16,
-                 score_21,final_score,duration)
-                VALUES (?,?,?,?,?,?,?,?)""", (
+                 score_21,final_score,duration,raw_line)
+                VALUES (?,?,?,?,?,?,?,?,?)""", (
                 fhid, s.set_number,
                 int(s.played) if s.played is not None else None,
                 s.score_8, s.score_16, s.score_21, s.final_score, s.duration,
+                s._raw,
             ))
 
         for p in dvw.players:
@@ -352,41 +449,46 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
                 INSERT INTO player
                 (file_header_id,team_index,number,player_id,
                  starting_position_s1,starting_position_s2,starting_position_s3,
+                 starting_position_s4,starting_position_s5,
                  short_name,last_name,first_name,role,foreign_player,
-                 field6,field7,field11,special_role,field15,field16,
+                 field11,special_role,field15,field16,
                  encoded_short,encoded_last,encoded_first,
-                 field20,field21,field22,field23)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                 field20,field21,field22,field23,raw_line)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 fhid, p.team_index, p.number, p.player_id,
                 p.starting_position_s1, p.starting_position_s2, p.starting_position_s3,
+                p.starting_position_s4, p.starting_position_s5,
                 p.short_name, p.last_name, p.first_name, p.role,
                 int(p.foreign) if p.foreign is not None else None,
-                p.field6, p.field7, p.field11, p.special_role,
+                p.field11, p.special_role,
                 p.field15, p.field16,
                 p.encoded_short, p.encoded_last, p.encoded_first,
                 p.field20, p.field21, p.field22, p.field23,
+                p._raw,
             ))
 
         for ac in dvw.attack_combinations:
             cur.execute("""
                 INSERT INTO attack_combination
                 (file_header_id,code,tempo,side,height,description,
-                 color,position,attacker_position,field5,field9,field10)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                 color,position,attacker_position,field5,is_back_row_attack,field10,raw_line)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 fhid, ac.code, ac.tempo, ac.side, ac.height, ac.description,
                 ac.color, ac.position, ac.attacker_position,
-                ac.field5, ac.field9, ac.field10,
+                ac.field5, int(ac.is_back_row_attack) if ac.is_back_row_attack is not None else None, ac.field10,
+                ac._raw,
             ))
 
         for sc in dvw.setter_calls:
             cur.execute("""
                 INSERT INTO setter_call
                 (file_header_id,code,description,color,
-                 x1,y1,x2,area_list,highlight_color,field1,field3)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+                 x1,y1,x2,area_list,highlight_color,field1,field3,raw_line)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 fhid, sc.code, sc.description, sc.color,
                 sc.x1, sc.y1, sc.x2, sc.area_list, sc.highlight_color,
                 sc.field1, sc.field3,
+                sc._raw,
             ))
 
         cur.execute("INSERT INTO winning_symbols (file_header_id,symbols) VALUES (?,?)",
@@ -403,7 +505,7 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
                 (file_header_id,event_order,raw,
                  team,player_number,skill,skill_type,evaluation,
                  attack_code,setter_code,start_zone,end_zone,end_subzone,
-                 special,custom1,custom2,video_time,
+                 point_phase,attack_cone,video_time,
                  set_number,home_rotation_pos,visiting_rotation_pos,
                  serving_team,video_frame,
                  rotation_home_1,rotation_home_2,rotation_home_3,
@@ -414,11 +516,11 @@ def dvw_to_db(dvw: DvwFile, db_path: str) -> int:
                  rotation_new_pos,sub_out_jersey,sub_in_jersey,lineup_server_jersey,
                  is_set_start,is_rotation,is_point,is_substitution,
                  is_timeout,is_point_consequence,is_lineup)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 fhid, i, ev.raw,
                 ev.team, ev.player_number, ev.skill, ev.skill_type, ev.evaluation,
                 ev.attack_code, ev.setter_code, ev.start_zone, ev.end_zone,
-                ev.end_subzone, ev.special, ev.custom1, ev.custom2, ev.video_time,
+                ev.end_subzone, ev.point_phase, ev.attack_cone, ev.video_time,
                 ev.set_number, ev.home_rotation_pos, ev.visiting_rotation_pos,
                 ev.serving_team, ev.video_frame,
                 ev.rotation_home_1, ev.rotation_home_2, ev.rotation_home_3,
@@ -460,6 +562,14 @@ def db_to_dvw(db_path: str, output_dir: str, file_header_id: int | None = None) 
         con.close()
 
 
+def _raw_col(row: sqlite3.Row, col: str) -> str | None:
+    """Read a column that may not exist in old DB schemas (returns None if absent)."""
+    try:
+        return row[col]
+    except IndexError:
+        return None
+
+
 def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
     """Reconstruct a DvwFile from a single file_header_id."""
     dvw = DvwFile()
@@ -495,6 +605,7 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             opponent_home_away=row["opponent_home_away"],
             field_l2_8=row["field_l2_8"],
             scout_license_id=row["scout_license_id"],
+            _raw_line1=_raw_col(row, "raw_line1"), _raw_line2=_raw_col(row, "raw_line2"),
         )
 
     row = con.execute("SELECT * FROM more_info WHERE file_header_id=?", (fhid,)).fetchone()
@@ -530,6 +641,7 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             score_8=row["score_8"], score_16=row["score_16"],
             score_21=row["score_21"], final_score=row["final_score"],
             duration=row["duration"],
+            _raw=_raw_col(row, "raw_line"),
         ))
 
     for row in con.execute(
@@ -541,16 +653,18 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             starting_position_s1=row["starting_position_s1"],
             starting_position_s2=row["starting_position_s2"],
             starting_position_s3=row["starting_position_s3"],
+            starting_position_s4=row["starting_position_s4"],
+            starting_position_s5=row["starting_position_s5"],
             short_name=row["short_name"], last_name=row["last_name"],
             first_name=row["first_name"], role=row["role"],
             foreign=bool(row["foreign_player"]) if row["foreign_player"] is not None else None,
-            field6=row["field6"], field7=row["field7"],
             field11=row["field11"], special_role=row["special_role"],
             field15=row["field15"], field16=row["field16"],
             encoded_short=row["encoded_short"],
             encoded_last=row["encoded_last"], encoded_first=row["encoded_first"],
             field20=row["field20"], field21=row["field21"],
             field22=row["field22"], field23=row["field23"],
+            _raw=_raw_col(row, "raw_line"),
         ))
 
     for row in con.execute(
@@ -560,15 +674,25 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             height=row["height"], description=row["description"],
             color=row["color"], position=row["position"],
             attacker_position=row["attacker_position"],
-            field5=row["field5"], field9=row["field9"], field10=row["field10"],
+            field5=row["field5"],
+            is_back_row_attack=(
+                bool(row["is_back_row_attack"])
+                if row["is_back_row_attack"] is not None else None
+            ),
+            field10=row["field10"],
+            _raw=_raw_col(row, "raw_line"),
         ))
 
     for row in con.execute("SELECT * FROM setter_call WHERE file_header_id=?", (fhid,)):
         dvw.setter_calls.append(SetterCall(
             code=row["code"], description=row["description"], color=row["color"],
-            x1=row["x1"], y1=row["y1"], x2=row["x2"],
+            # x1/y1/x2 may be INTEGER in old DBs — always read as str
+            x1=(str(row["x1"]) if row["x1"] is not None else None),
+            y1=(str(row["y1"]) if row["y1"] is not None else None),
+            x2=(str(row["x2"]) if row["x2"] is not None else None),
             area_list=row["area_list"], highlight_color=row["highlight_color"],
             field1=row["field1"], field3=row["field3"],
+            _raw=_raw_col(row, "raw_line"),
         ))
 
     row = con.execute(
@@ -587,7 +711,7 @@ def _load_from_db(con: sqlite3.Connection, fhid: int) -> DvwFile:
             evaluation=row["evaluation"], attack_code=row["attack_code"],
             setter_code=row["setter_code"], start_zone=row["start_zone"],
             end_zone=row["end_zone"], end_subzone=row["end_subzone"],
-            special=row["special"], custom1=row["custom1"], custom2=row["custom2"],
+            point_phase=row["point_phase"], attack_cone=row["attack_cone"],
             video_time=row["video_time"], set_number=row["set_number"],
             home_rotation_pos=row["home_rotation_pos"],
             visiting_rotation_pos=row["visiting_rotation_pos"],
@@ -654,14 +778,14 @@ def _player_line(p: Player) -> str:
     return _join([
         p.team_index, p.number, p.player_id,
         p.starting_position_s1, p.starting_position_s2,
-        p.starting_position_s3, p.field6, p.field7,
+        p.starting_position_s3, p.starting_position_s4, p.starting_position_s5,
         p.short_name, p.last_name, p.first_name,
         p.field11, p.special_role, p.role,
         "False" if not p.foreign else "True",
         p.field15, p.field16,
         p.encoded_short, p.encoded_last, p.encoded_first,
         p.field20, p.field21, p.field22, p.field23,
-    ], min_fields=17)
+    ], min_fields=21)  # original always emits up to encoded_first (index 19) + trailing empties
 
 
 def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
@@ -692,14 +816,21 @@ def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
 
     m = dvw.match
     L("[3MATCH]")
-    L(_join([m.date,m.time,m.season,m.league,m.phase,
-             m.home_indicator,m.match_number,m.federation_match_id,
-             m.codepage,m.field9,m.category_code,m.field11,
-             m.encoded_league,m.encoded_phase]))
-    L(_join([m.field_l2_0,m.field_l2_1,m.competition_code,
-             m.field_l2_3,m.field_l2_4,m.field_l2_5,
-             m.home_away,m.opponent_home_away,m.field_l2_8,
-             m.scout_license_id], min_fields=6))
+    if m._raw_line1 is not None:
+        L(m._raw_line1)
+    else:
+        L(_join([m.date,m.time,m.season,m.league,m.phase,
+                 m.home_indicator,m.match_number,m.federation_match_id,
+                 m.codepage,m.field9,m.category_code,m.field11,
+                 m.encoded_league,m.encoded_phase,
+                 None], min_fields=15))
+    if m._raw_line2 is not None:
+        L(m._raw_line2)
+    else:
+        L(_join([m.field_l2_0,m.field_l2_1,m.competition_code,
+                 m.field_l2_3,m.field_l2_4,m.field_l2_5,
+                 m.home_away,m.opponent_home_away,m.field_l2_8,
+                 m.scout_license_id], min_fields=6))
 
     L("[3TEAMS]")
     for t in dvw.teams:
@@ -719,30 +850,38 @@ def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
 
     L("[3SET]")
     for s in dvw.sets:
-        L(";".join([_v(s.played) if s.played is not None else "True",
-                    _v(s.score_8),_v(s.score_16),_v(s.score_21),
-                    _v(s.final_score),_v(s.duration),"",]))
+        if s._raw is not None:
+            L(s._raw)
+        else:
+            L(";".join([
+                _v(s.played) if s.played is not None else "True",
+                s.score_8 if s.score_8 is not None else "",
+                _v(s.score_16), _v(s.score_21),
+                _v(s.final_score), _v(s.duration), "",
+            ]))
 
     L("[3PLAYERS-H]")
-    for p in [x for x in dvw.players if x.team_index == 0]:
-        L(_player_line(p))
+    for p in dvw.players:
+        if p.team_index == 0:
+            L(p._raw if p._raw is not None else _player_line(p))
 
     L("[3PLAYERS-V]")
-    for p in [x for x in dvw.players if x.team_index == 1]:
-        L(_player_line(p))
+    for p in dvw.players:
+        if p.team_index == 1:
+            L(p._raw if p._raw is not None else _player_line(p))
 
     L("[3ATTACKCOMBINATION]")
     for ac in dvw.attack_combinations:
-        L(";".join([_v(ac.code),_v(ac.tempo),_v(ac.side),_v(ac.height),
-                    _v(ac.description),_v(ac.field5),_v(ac.color),
-                    _v(ac.position),_v(ac.attacker_position),
-                    _v(ac.field9),_v(ac.field10),"",]))
+        L(ac._raw if ac._raw is not None else _join([ac.code, ac.tempo, ac.side, ac.height,
+                  ac.description, ac.field5, ac.color,
+                  ac.position, ac.attacker_position,
+                  "1" if ac.is_back_row_attack else "", ac.field10]))
 
     L("[3SETTERCALL]")
     for sc in dvw.setter_calls:
-        L(";".join([_v(sc.code),_v(sc.field1),_v(sc.description),_v(sc.field3),
-                    _v(sc.color),_v(sc.x1),_v(sc.y1),_v(sc.x2),
-                    _v(sc.area_list),_v(sc.highlight_color),"",]))
+        L(sc._raw if sc._raw is not None else _join([sc.code, sc.field1, sc.description, sc.field3,
+                  sc.color, sc.x1, sc.y1, sc.x2,
+                  sc.area_list, sc.highlight_color]))
 
     L("[3WINNINGSYMBOLS]")
     if dvw.winning_symbols:
@@ -758,9 +897,10 @@ def _write_dvw(dvw: DvwFile, output_dir: str, fhid: int) -> str:
     for ev in dvw.scout_events:
         L(ev.raw)
 
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(dvw.source_path).stem if dvw.source_path else f"match_{fhid}"
+    # Each export lives in its own <stem>.dvw/ directory.
+    out_dir = Path(output_dir) / f"{stem}.dvw"
+    out_dir.mkdir(parents=True, exist_ok=True)
     out_path = str(out_dir / f"{stem}.dvw")
 
     with open(out_path, "wb") as fh:

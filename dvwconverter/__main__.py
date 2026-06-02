@@ -1,30 +1,24 @@
-"""CLI entry point; run via `python -m dvwconverter__main__` or `dvwconverter__main__`."""
+"""CLI entry point; run via `python -m dvwconverter` or `dvwconverter`."""
 
 import argparse
+import re
 import shutil
 import sqlite3
 import sys
-import tempfile
+import traceback
 from pathlib import Path
 
 from .parser import parse_dvw
 from .db import dvw_to_db, db_to_dvw
 from .accuracy import compute_accuracy
-from .roundtrip import roundtrip_accuracy, roundtrip_from_recon
+from .roundtrip import roundtrip_accuracy, roundtrip_from_recon, RoundTripReport
 
 DEFAULT_OUTPUT_DIR = "output"
 DEFAULT_INPUT_DIR  = "input"
 
 
-def _ensure_input_dir() -> Path:
-    p = Path(DEFAULT_INPUT_DIR)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
 def _resolve_input(raw: str) -> str:
-    """
-    Locate an input file, copying it into the input folder if needed.
+    """Locate an input file, copying it into the input folder if needed.
 
     Resolution order:
       1. Path exists and is already the input-folder copy → use as-is.
@@ -32,9 +26,10 @@ def _resolve_input(raw: str) -> str:
       3. Not found at given path, but same name exists in input folder → use that.
       4. Not found anywhere → return as-is so the caller raises a clear error.
     """
-    input_dir = _ensure_input_dir()
-    p = Path(raw).expanduser().resolve()
+    input_dir = Path(DEFAULT_INPUT_DIR)
+    input_dir.mkdir(parents=True, exist_ok=True)
 
+    p = Path(raw).expanduser().resolve()
     if p.exists():
         dest = input_dir / p.name
         if p != dest.resolve():
@@ -50,21 +45,16 @@ def _resolve_input(raw: str) -> str:
     return raw
 
 
-def _output_dir(args: argparse.Namespace) -> str:
-    return getattr(args, "output_dir", None) or DEFAULT_OUTPUT_DIR
-
-
 # ── dvw2db ────────────────────────────────────────────────────────────────────
 
 def cmd_dvw2db(args: argparse.Namespace) -> int:
-    """
-    Import one or more .dvw files into a single SQLite database.
+    """Import one or more .dvw files into a single SQLite database.
 
-    After each import a round-trip check is performed automatically:
+    With --rt: after each import a round-trip check is performed:
       dvw (original) → db → dvw (reconstructed) → diff → accuracy report
-    The reconstructed .dvw is saved to <output_dir>/roundtrip/.
+    The reconstructed file is saved as rt_<name>.dvw in <output_dir>/roundtrip/.
     """
-    out_root  = Path(_output_dir(args))
+    out_root  = Path(args.output_dir)
     db_path   = str(out_root / args.db)
     recon_dir = str(out_root / "roundtrip")
     errors    = 0
@@ -72,30 +62,30 @@ def cmd_dvw2db(args: argparse.Namespace) -> int:
     for src in [_resolve_input(f) for f in args.input]:
         src_path = Path(src)
         try:
-            # ── forward: dvw → db ──────────────────────────────────────────
-            print(f"  parsing  {src_path.name} ...", end=" ", flush=True)
-            dvw   = parse_dvw(src)
-            fhid  = dvw_to_db(dvw, db_path)
-            home  = dvw.teams[0].team_name if dvw.teams else "?"
-            away  = dvw.teams[1].team_name if len(dvw.teams) > 1 else "?"
-            acc   = compute_accuracy(dvw)
+            print(f"  importing  {src_path.name} ...", end=" ", flush=True)
+            dvw  = parse_dvw(src)
+            fhid = dvw_to_db(dvw, db_path)
+            home = dvw.teams[0].team_name if dvw.teams else "?"
+            away = dvw.teams[1].team_name if len(dvw.teams) > 1 else "?"
+            acc  = compute_accuracy(dvw)
 
-            # ── backward: db → dvw, then diff ─────────────────────────────
-            try:
-                rt = roundtrip_accuracy(src, db_path, fhid, recon_dir)
-                rt_str = rt.format_summary()
-            except Exception as rt_exc:
-                rt_str = f"roundtrip-error={rt_exc}"
+            rt_str = ""
+            rt = None
+            if args.rt:
+                try:
+                    rt = roundtrip_accuracy(src, db_path, fhid, recon_dir)
+                    rt_str = f"  {rt.format_summary()}"
+                except Exception as rt_exc:
+                    rt_str = f"  roundtrip-error={rt_exc}"
 
             print(
-                f"ok  [id={fhid}  {home} vs {away}"
+                f"ok  id={fhid}  {home} vs {away}"
                 f"  events={len(dvw.scout_events)}"
                 f"  accuracy={acc.score:.1f}"
-                f"  {rt_str}]"
+                f"{rt_str}"
             )
 
-            # Full round-trip report on its own line if verbose
-            if getattr(args, "verbose", False):
+            if args.verbose and isinstance(rt, RoundTripReport):
                 print(rt.format_report())
 
         except FileNotFoundError as exc:
@@ -103,13 +93,11 @@ def cmd_dvw2db(args: argparse.Namespace) -> int:
             errors += 1
         except sqlite3.OperationalError as exc:
             msg = str(exc)
-            # Diagnose the common placeholder/column mismatch
-            import re as _re
-            m = _re.search(r'(\d+) values for (\d+) columns', msg)
+            m = re.search(r'(\d+) values for (\d+) columns', msg)
             if m:
                 vals, cols = int(m.group(1)), int(m.group(2))
                 print(
-                    f"FAILED – database schema mismatch: INSERT supplies {vals} values "
+                    f"FAILED – schema mismatch: INSERT supplies {vals} values "
                     f"for {cols} columns (schema/code out of sync; try re-importing)",
                     file=sys.stderr,
                 )
@@ -125,30 +113,27 @@ def cmd_dvw2db(args: argparse.Namespace) -> int:
             )
             errors += 1
         except Exception as exc:
-            exc_type = type(exc).__name__
-            print(f"FAILED – {exc_type}: {exc}", file=sys.stderr)
-            if getattr(args, 'verbose', False):
-                import traceback
+            print(f"FAILED – {type(exc).__name__}: {exc}", file=sys.stderr)
+            if args.verbose:
                 traceback.print_exc()
             errors += 1
 
-    print(f"\nDatabase     : {db_path}")
-    print(f"Reconstructed: {recon_dir}/")
+    print(f"\nDatabase : {db_path}")
+    if args.rt:
+        print(f"Roundtrip: {recon_dir}/")
     return errors
 
 
 # ── db2dvw ────────────────────────────────────────────────────────────────────
 
 def cmd_db2dvw(args: argparse.Namespace) -> int:
-    """
-    Export one or all matches from a database back to .dvw files.
+    """Export one or all matches from a database back to .dvw files.
 
-    After each export a round-trip accuracy report is printed by comparing
-    the reconstructed .dvw against the original source file stored in the DB
-    (if the original path is still accessible on disk).
+    Each match is written as <name>.dvw/<name>.dvw inside <output_dir>/dvw/.
+    With --rt: also diffs the reconstructed file against the original source
+    stored in the DB (if it is still accessible on disk).
     """
-    out_root   = Path(_output_dir(args))
-    out_dvw_dir = str(out_root / "dvw")
+    out_dvw_dir = str(Path(args.output_dir) / "dvw")
     fhid        = getattr(args, "id", None)
     db_path     = _resolve_input(args.input)
 
@@ -159,36 +144,39 @@ def cmd_db2dvw(args: argparse.Namespace) -> int:
         return 1
 
     errors = 0
-    for recon_path in written:
-        # Determine the fhid for this file (needed for roundtrip_from_recon)
-        stem = Path(recon_path).stem
-        try:
-            con = sqlite3.connect(db_path)
-            con.row_factory = sqlite3.Row
-            row = con.execute(
-                "SELECT id FROM file_header WHERE source_path LIKE ?",
-                (f"%{stem}%",)
-            ).fetchone()
-            con.close()
-            file_fhid = row["id"] if row else fhid
-        except Exception:
-            file_fhid = fhid
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        for recon_path in written:
+            stem = Path(recon_path).stem
+            try:
+                row = con.execute(
+                    "SELECT id FROM file_header WHERE source_path LIKE ?",
+                    (f"%{stem}%",)
+                ).fetchone()
+                file_fhid = row["id"] if row else fhid
+            except Exception:
+                file_fhid = fhid
 
-        print(f"  written: {recon_path}")
+            # recon_path is <out_dvw_dir>/<stem>.dvw/<stem>.dvw
+            dvw_dir = Path(recon_path).parent
+            print(f"  written: {dvw_dir}/")
 
-        # Round-trip: diff reconstructed vs original
-        try:
-            rt = roundtrip_from_recon(recon_path, db_path, file_fhid)
-            if rt is None:
-                print("    [roundtrip] original file not accessible – skipped")
-            else:
-                print(f"    [roundtrip] {rt.format_summary()}")
-                if getattr(args, "verbose", False):
-                    print(rt.format_report())
-        except Exception as rt_exc:
-            print(f"    [roundtrip] error – {rt_exc}")
+            if args.rt:
+                try:
+                    rt = roundtrip_from_recon(recon_path, db_path, file_fhid)
+                    if rt is None:
+                        print("    [rt] original file not accessible – skipped")
+                    else:
+                        print(f"    [rt] {rt.format_summary()}")
+                        if args.verbose:
+                            print(rt.format_report())
+                except Exception as rt_exc:
+                    print(f"    [rt] error – {rt_exc}")
+    finally:
+        con.close()
 
-    print(f"\nOutput directory: {out_dvw_dir}")
+    print(f"\nOutput: {out_dvw_dir}/")
     return errors
 
 
@@ -224,7 +212,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
-# ── parser ────────────────────────────────────────────────────────────────────
+# ── argument parser ───────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
     from . import __version__
@@ -237,27 +225,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     p1 = sub.add_parser(
         "dvw2db",
-        help="Import .dvw file(s) into a SQLite database (includes round-trip accuracy)",
+        help="Import .dvw file(s) into a SQLite database",
     )
     p1.add_argument("input", nargs="+", metavar="FILE.dvw")
     p1.add_argument("-o", "--db", default="matches.db", metavar="NAME.db",
                     help="Output database filename (default: matches.db)")
     p1.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, metavar="DIR",
                     help=f"Root output directory (default: {DEFAULT_OUTPUT_DIR})")
+    p1.add_argument("--rt", action="store_true",
+                    help="Run round-trip check after each import (writes rt_<name>.dvw to roundtrip/)")
     p1.add_argument("--verbose", action="store_true",
-                    help="Print full round-trip diff report for each file")
+                    help="Print full round-trip diff report (implies --rt)")
 
     p2 = sub.add_parser(
         "db2dvw",
-        help="Export match(es) from SQLite to .dvw (includes round-trip accuracy)",
+        help="Export match(es) from SQLite to .dvw",
     )
     p2.add_argument("input", metavar="DB.db")
     p2.add_argument("--id", type=int, default=None,
                     help="Export only the match with this file_header_id")
     p2.add_argument("-o", "--output-dir", default=DEFAULT_OUTPUT_DIR, metavar="DIR",
                     help=f"Root output directory (default: {DEFAULT_OUTPUT_DIR})")
+    p2.add_argument("--rt", action="store_true",
+                    help="Run round-trip check after each export")
     p2.add_argument("--verbose", action="store_true",
-                    help="Print full round-trip diff report for each file")
+                    help="Print full round-trip diff report (implies --rt)")
 
     p3 = sub.add_parser("info", help="List matches stored in a database")
     p3.add_argument("input", metavar="DB.db")
@@ -267,6 +259,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # --verbose implies --rt: no need to specify both flags
+    if getattr(args, "verbose", False):
+        args.rt = True
     dispatch = {"dvw2db": cmd_dvw2db, "db2dvw": cmd_db2dvw, "info": cmd_info}
     return dispatch[args.command](args)
 

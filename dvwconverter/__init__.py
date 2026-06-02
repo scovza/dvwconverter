@@ -1,4 +1,4 @@
-"""dvwconverter__main__ – DataVolley .dvw ↔ SQLite converter."""
+"""dvwconverter – DataVolley .dvw ↔ SQLite converter."""
 
 from .parser import parse_dvw, DvwFile
 from .db import dvw_to_db, db_to_dvw
@@ -11,6 +11,7 @@ __all__ = [
     "compute_accuracy", "AccuracyReport",
     "roundtrip_accuracy", "roundtrip_from_recon", "RoundTripReport", "SectionDiff",
 ]
+
 try:
     from importlib.metadata import version as _version
     __version__ = _version("dvwconverter")
